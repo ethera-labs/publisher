@@ -7,7 +7,7 @@ import (
 	"path"
 	"time"
 
-	compreg "github.com/compose-network/registry/registry"
+	compreg "github.com/ethera-labs/registry/registry"
 	"github.com/rs/zerolog"
 )
 
