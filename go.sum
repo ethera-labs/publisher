@@ -51,8 +51,8 @@ github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1 h1:YLtO71vCjJRCBcrPMtQ9nqBsqpA1
 github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1/go.mod h1:hyedUtir6IdtD/7lIxGeCxkaw7y45JueMRL4DIyJDKs=
 github.com/emicklei/dot v1.6.2 h1:08GN+DD79cy/tzN6uLCT84+2Wk9u+wvqP+Hkx/dIR8A=
 github.com/emicklei/dot v1.6.2/go.mod h1:DeV7GvQtIw4h2u73RKBkkFdvVAz0D9fzeJrgPW6gy/s=
-github.com/ethera-labs/registry v0.2.0 h1:U/wWXORXghWWNLMGv+EEyTC+XtidLAvlarU/lwHqAN8=
-github.com/ethera-labs/registry v0.2.0/go.mod h1:yyqPMH2cgY3vnYrdccPo1qYcRspAb2B78DGKwaJWsGQ=
+github.com/ethera-labs/registry v0.2.1 h1:KYd50FUy9mZ7wzAS+3CbiXPuqJz7ox4GZe/ph6m6Nds=
+github.com/ethera-labs/registry v0.2.1/go.mod h1:yyqPMH2cgY3vnYrdccPo1qYcRspAb2B78DGKwaJWsGQ=
 github.com/ethereum/c-kzg-4844/v2 v2.1.3 h1:DQ21UU0VSsuGy8+pcMJHDS0CV1bKmJmxsJYK8l3MiLU=
 github.com/ethereum/c-kzg-4844/v2 v2.1.3/go.mod h1:fyNcYI/yAuLWJxf4uzVtS8VDKeoAaRM8G/+ADz/pRdA=
 github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab h1:rvv6MJhy07IMfEKuARQ9TKojGqLVNxQajaXEp/BoqSk=
