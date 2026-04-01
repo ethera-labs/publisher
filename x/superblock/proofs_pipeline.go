@@ -584,6 +584,7 @@ func (p *proofPipeline) handleCompleted(ctx context.Context, jobID string, job p
 		Msg("Proof job finished successfully")
 
 	outputs := status.SuperblockAggOutputs
+	p.enrichBootInfoChainIDs(ctx, job.hash, outputs)
 	proofBytes := status.Proof
 	if len(proofBytes) == 0 {
 		p.log.Warn().Str("job_id", jobID).Msg("Completed proof job returned empty proof")
@@ -626,6 +627,29 @@ func (p *proofPipeline) handleCompleted(ctx context.Context, jobID string, job p
 	p.log.Info().Str("job_id", jobID).Uint64("superblock", job.number).Msg("Proof job completed and published")
 
 	go p.processQueuedJobs(ctx)
+}
+
+// enrichBootInfoChainIDs populates ChainId on each BootInfo entry by matching
+// rollupConfigHash against the original submissions which carry the chain ID.
+func (p *proofPipeline) enrichBootInfoChainIDs(ctx context.Context, sbHash common.Hash, outputs *proofs.SuperblockAggOutputs) {
+	if outputs == nil || len(outputs.BootInfo) == 0 {
+		return
+	}
+	subs, err := p.collector.ListSubmissions(ctx, sbHash)
+	if err != nil || len(subs) == 0 {
+		p.log.Warn().Err(err).Msg("Could not retrieve submissions to enrich boot info chain IDs")
+		return
+	}
+	configToChain := make(map[common.Hash]uint64, len(subs))
+	for _, s := range subs {
+		configToChain[s.Aggregation.RollupConfigHash] = uint64(s.ChainID)
+	}
+	for i, bi := range outputs.BootInfo {
+		h := common.HexToHash(bi.RollupConfigHash)
+		if chainId, ok := configToChain[h]; ok {
+			outputs.BootInfo[i].ChainId = chainId
+		}
+	}
 }
 
 func (p *proofPipeline) removeJob(jobID string) {

@@ -23,11 +23,12 @@ type ProofJobInput struct {
 
 // BootInfo represents boot information for a rollup (mirrors Rust BootInfo).
 type BootInfo struct {
-	L1Head           string `json:"l1_head"`      // hex string
-	L2PreRoot        string `json:"l2_pre_root"`  // hex string
-	L2PostRoot       string `json:"l2_post_root"` // hex string
+	L1Head           string `json:"l1_head"`            // hex string
+	L2PreRoot        string `json:"l2_pre_root"`        // hex string
+	L2PostRoot       string `json:"l2_post_root"`       // hex string
 	L2BlockNumber    uint64 `json:"l2_block_number"`
 	RollupConfigHash string `json:"rollup_config_hash"` // hex string
+	ChainId          uint64 `json:"chain_id,omitempty"` // populated by publisher from submissions
 }
 
 // SuperblockAggOutputs represents serializable superblock aggregation outputs (mirrors Rust SuperblockAggOutputs).

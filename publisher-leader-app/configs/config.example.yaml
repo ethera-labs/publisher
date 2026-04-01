@@ -116,9 +116,9 @@ l1:
   # ENV: L1_RPC_ENDPOINT
   rpc_endpoint: "ws://localhost:8546"
 
-  # Deployed Superblock contract address
-  # ENV: L1_SUPERBLOCK_CONTRACT
-  superblock_contract: "0xYourContractAddress"
+  # Dispute game factory contract address used for proof-enabled superblock submission.
+  # ENV: L1_DISPUTE_GAME_FACTORY (legacy alias: L1_SUPERBLOCK_CONTRACT)
+  dispute_game_factory: "0xYourContractAddress"
 
   # Chain ID (optional; auto-detected if omitted)
   # ENV: L1_CHAIN_ID
