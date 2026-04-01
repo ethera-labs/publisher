@@ -117,6 +117,8 @@ func Load(configPath string) (*Config, error) {
 	if strings.TrimSpace(cfg.L1.DisputeGameFactory) == "" {
 		if v := strings.TrimSpace(os.Getenv("L1_DISPUTE_GAME_FACTORY")); v != "" {
 			cfg.L1.DisputeGameFactory = v
+		} else if v := strings.TrimSpace(os.Getenv("L1_SUPERBLOCK_CONTRACT")); v != "" {
+			cfg.L1.DisputeGameFactory = v
 		}
 	}
 	if strings.TrimSpace(cfg.L1.SharedPublisherPkHex) == "" {

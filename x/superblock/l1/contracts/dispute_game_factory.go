@@ -3,6 +3,7 @@ package contracts
 import (
 	"context"
 	_ "embed"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/compose-network/publisher/x/superblock/store"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // DisputeGameFactory ABI JSON embedded at compile time
@@ -80,14 +82,15 @@ func (b *DisputeGameFactoryBinding) BuildPublishWithProofCalldata(
 		return nil, fmt.Errorf("proof cannot be empty")
 	}
 
-	// Encode the extraData as (bytes outputs, bytes proof)
-	extraData, err := encodeExtraData(b.toSuperblockAggregationOutputs(outputs), proof)
+	aggOutputs := b.toSuperblockAggregationOutputs(outputs)
+	srp := b.buildSuperRootProof(sb, outputs)
+
+	extraData, err := encodeExtraData(aggOutputs, srp, proof)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode extradata: %v", err)
 	}
 
-	// rootClaim - parent superblock batch hash.
-	rootClaim := sb.ParentHash
+	rootClaim := hashSuperRootProof(srp)
 	data, err := b.abi.Pack("create", composeGameType, rootClaim, extraData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to pack DisputeGameFactory.create calldata: %w", err)
@@ -96,7 +99,7 @@ func (b *DisputeGameFactoryBinding) BuildPublishWithProofCalldata(
 	return data, nil
 }
 
-func encodeExtraData(superBlockAggOutputs superblockAggregationOutputs, proof []byte) ([]byte, error) {
+func encodeExtraData(aggOutputs superblockAggregationOutputs, srp superRootProof, proof []byte) ([]byte, error) {
 	superblockType, _ := abi.NewType("tuple", "SuperblockAggregationOutputs", []abi.ArgumentMarshaling{
 		{Name: "superblockNumber", Type: "uint256"},
 		{Name: "parentSuperblockBatchHash", Type: "bytes32"},
@@ -109,19 +112,68 @@ func encodeExtraData(superBlockAggOutputs superblockAggregationOutputs, proof []
 		}},
 	})
 
+	superRootProofType, _ := abi.NewType("tuple", "SuperRootProof", []abi.ArgumentMarshaling{
+		{Name: "version", Type: "bytes1"},
+		{Name: "timestamp", Type: "uint64"},
+		{Name: "outputRoots", Type: "tuple[]", Components: []abi.ArgumentMarshaling{
+			{Name: "chainId", Type: "uint256"},
+			{Name: "root", Type: "bytes32"},
+		}},
+	})
+
 	bytesType, _ := abi.NewType("bytes", "", nil)
 
 	arguments := abi.Arguments{
 		{Type: superblockType},
+		{Type: superRootProofType},
 		{Type: bytesType},
 	}
 
-	packed, err := arguments.Pack(superBlockAggOutputs, proof)
+	packed, err := arguments.Pack(aggOutputs, srp, proof)
 	if err != nil {
 		return nil, err
 	}
 
 	return packed, nil
+}
+
+// buildSuperRootProof constructs a SuperRootProof from superblock and prover outputs.
+func (b *DisputeGameFactoryBinding) buildSuperRootProof(
+	sb *store.Superblock,
+	outputs *proofs.SuperblockAggOutputs,
+) superRootProof {
+	var outputRoots []outputRootWithChainId
+	if outputs != nil {
+		for _, bi := range outputs.BootInfo {
+			outputRoots = append(outputRoots, outputRootWithChainId{
+				ChainId: new(big.Int).SetUint64(bi.ChainId),
+				Root:    common.HexToHash(bi.L2PostRoot),
+			})
+		}
+	}
+	return superRootProof{
+		Version:     [1]byte{0x01},
+		Timestamp:   uint64(sb.Timestamp.Unix()),
+		OutputRoots: outputRoots,
+	}
+}
+
+// hashSuperRootProof mirrors Hashing.hashSuperRootProof from the OP Stack contracts.
+// It computes keccak256(version || timestamp_be8 || chainId1_be32 || root1 || ...).
+func hashSuperRootProof(srp superRootProof) common.Hash {
+	buf := make([]byte, 0, 1+8+len(srp.OutputRoots)*64)
+	buf = append(buf, srp.Version[0])
+
+	ts := make([]byte, 8)
+	binary.BigEndian.PutUint64(ts, srp.Timestamp)
+	buf = append(buf, ts...)
+
+	for _, or := range srp.OutputRoots {
+		buf = append(buf, common.LeftPadBytes(or.ChainId.Bytes(), 32)...)
+		buf = append(buf, or.Root[:]...)
+	}
+
+	return crypto.Keccak256Hash(buf)
 }
 
 // toSuperblockAggregationOutputs converts prover outputs to SuperblockAggregationOutputs
