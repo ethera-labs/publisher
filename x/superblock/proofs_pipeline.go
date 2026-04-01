@@ -115,40 +115,6 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 		Int("submissions_found", len(proofSubs)).
 		Msg("Checking submissions for superblock")
 
-	// TODO: Get ALL submissions from collector regardless of superblock hash
-	// and then modify their superblock number/hash to match current superblock
-	allSubs := p.collector.GetStats()
-	totalSubmissions := allSubs["total_submissions"].(int)
-
-	if len(proofSubs) == 0 && totalSubmissions > 0 {
-		p.log.Info().
-			Uint64("current_superblock", sb.Number).
-			Int("total_submissions_in_collector", totalSubmissions).
-			Msg("No submissions for current superblock, but collector has submissions - trying to reuse them")
-
-		// TODO: For testing, get submissions from ANY superblock and modify them to match current one
-		// This is a hack to test prover integration without proper coordination
-		allSuperblocks := allSubs["submissions_by_superblock"].(map[string]int)
-		for sbHash := range allSuperblocks {
-			otherHash := common.HexToHash(sbHash)
-			otherSubs, err := p.collector.ListSubmissions(ctx, otherHash)
-			if err == nil && len(otherSubs) > 0 {
-				p.log.Info().
-					Str("reusing_from_superblock", sbHash).
-					Int("submissions_count", len(otherSubs)).
-					Msg("Reusing submissions from different superblock")
-
-				// Modify the submissions to match current superblock
-				for i := range otherSubs {
-					otherSubs[i].SuperblockNumber = sb.Number
-					otherSubs[i].SuperblockHash = sb.Hash
-				}
-				proofSubs = otherSubs
-				break
-			}
-		}
-	}
-
 	if len(proofSubs) == 0 {
 		p.log.Info().Uint64("superblock", sb.Number).Msg("No proof submissions available")
 		return nil
@@ -240,10 +206,9 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 }
 
 func (p *proofPipeline) requiredChainIDs(subs []proofs.Submission) []uint32 {
-	// TODO: For testing, can temporarily comment out the config check and return any chain IDs from submissions
-	// if len(p.cfg.Collector.RequiredChainIDs) > 0 {
-	//	 return append([]uint32(nil), p.cfg.Collector.RequiredChainIDs...)
-	// }
+	if len(p.cfg.Collector.RequiredChainIDs) > 0 {
+		return append([]uint32(nil), p.cfg.Collector.RequiredChainIDs...)
+	}
 	seen := make(map[uint32]struct{}, len(subs))
 	for _, s := range subs {
 		seen[s.ChainID] = struct{}{}
