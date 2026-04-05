@@ -104,6 +104,14 @@ func (b *mockBinding) ABI() abi.ABI { return b.abi }
 
 func (b *mockBinding) GameType() uint32 { return 5555 }
 
+func (b *mockBinding) BuildGameCountCalldata() ([]byte, error) {
+	return b.abi.Pack("gameCount")
+}
+
+func (b *mockBinding) BuildFindLatestGamesCalldata(start *big.Int, n *big.Int) ([]byte, error) {
+	return b.abi.Pack("findLatestGames", b.GameType(), start, n)
+}
+
 var _ contracts.Binding = (*mockBinding)(nil)
 
 func TestPublishSuperblock_SignsAndSends(t *testing.T) {

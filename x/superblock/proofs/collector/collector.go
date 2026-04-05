@@ -194,6 +194,18 @@ func (m *ProofCollector) ListQueuedJobs(_ context.Context) ([]proofs.Status, err
 	return queuedJobs, nil
 }
 
+// DeleteSubmissions removes all submissions and status for the given superblock hash.
+func (m *ProofCollector) DeleteSubmissions(_ context.Context, sbHash common.Hash) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := sbHash.Hex()
+	delete(m.bySB, key)
+	delete(m.statuses, key)
+	m.log.Info().Str("superblock_hash", key).Msg("Deleted submissions for superblock")
+	return nil
+}
+
 // statsLogger periodically logs collector statistics
 func (m *ProofCollector) statsLogger(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)

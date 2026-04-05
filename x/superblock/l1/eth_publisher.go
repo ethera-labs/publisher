@@ -433,6 +433,100 @@ func (p *EthPublisher) WatchSuperblocks(ctx context.Context) (<-chan *events.Sup
 	return out, nil
 }
 
+// GetLastSuperblockNumber reads the last published superblock number from the
+// L1 contract by calling gameCount + findLatestGames and decoding the
+// superblockNumber from the extraData of the most recent compose game.
+func (p *EthPublisher) GetLastSuperblockNumber(ctx context.Context) (uint64, error) {
+	to := p.contract.Address()
+
+	// 1. Get total game count.
+	countData, err := p.contract.BuildGameCountCalldata()
+	if err != nil {
+		return 0, fmt.Errorf("build gameCount calldata: %w", err)
+	}
+	countRes, err := p.client.CallContract(ctx, ethereum.CallMsg{To: &to, Data: countData}, nil)
+	if err != nil {
+		return 0, fmt.Errorf("call gameCount: %w", err)
+	}
+	if len(countRes) == 0 {
+		return 0, nil
+	}
+	gameCount := new(big.Int).SetBytes(countRes)
+	if gameCount.Sign() == 0 {
+		return 0, nil
+	}
+
+	// 2. findLatestGames(composeGameType, gameCount-1, 1) to get the latest compose game.
+	start := new(big.Int).Sub(gameCount, big.NewInt(1))
+	findData, err := p.contract.BuildFindLatestGamesCalldata(start, big.NewInt(1))
+	if err != nil {
+		return 0, fmt.Errorf("build findLatestGames calldata: %w", err)
+	}
+	findRes, err := p.client.CallContract(ctx, ethereum.CallMsg{To: &to, Data: findData}, nil)
+	if err != nil {
+		return 0, fmt.Errorf("call findLatestGames: %w", err)
+	}
+
+	// 3. Decode the result to extract extraData, then extract superblockNumber.
+	return p.decodeSuperblockNumberFromGames(findRes)
+}
+
+// decodeSuperblockNumberFromGames decodes the findLatestGames return value and
+// extracts superblockNumber (first uint256) from the extraData of the first result.
+func (p *EthPublisher) decodeSuperblockNumberFromGames(data []byte) (uint64, error) {
+	ap, ok := p.contract.(abiProvider)
+	if !ok {
+		return 0, fmt.Errorf("contract binding does not expose ABI")
+	}
+
+	method, exists := ap.ABI().Methods["findLatestGames"]
+	if !exists {
+		return 0, fmt.Errorf("findLatestGames method not found in ABI")
+	}
+
+	decoded, err := method.Outputs.Unpack(data)
+	if err != nil {
+		return 0, fmt.Errorf("unpack findLatestGames output: %w", err)
+	}
+
+	// decoded[0] is a slice of structs (anonymous tuples).
+	games, ok := decoded[0].([]struct {
+		Index     *big.Int `json:"index"`
+		Metadata  [32]byte `json:"metadata"`
+		Timestamp uint64   `json:"timestamp"`
+		RootClaim [32]byte `json:"rootClaim"`
+		ExtraData []byte   `json:"extraData"`
+	})
+	if !ok {
+		return 0, fmt.Errorf("unexpected findLatestGames result type: %T", decoded[0])
+	}
+	if len(games) == 0 {
+		return 0, nil
+	}
+
+	extraData := games[0].ExtraData
+	// extraData is ABI-encoded: (SuperblockAggregationOutputs, SuperRootProof, bytes proof)
+	// SuperblockAggregationOutputs is a dynamic tuple whose first field is superblockNumber (uint256).
+	// The first 32 bytes are the offset to SuperblockAggregationOutputs, then at that offset
+	// the first 32 bytes are superblockNumber.
+	if len(extraData) < 96 {
+		return 0, fmt.Errorf("extraData too short: %d bytes", len(extraData))
+	}
+	// First word is offset to the first tuple element.
+	offset := new(big.Int).SetBytes(extraData[:32]).Uint64()
+	if offset+32 > uint64(len(extraData)) {
+		return 0, fmt.Errorf("invalid offset in extraData: %d", offset)
+	}
+	sbNumber := new(big.Int).SetBytes(extraData[offset : offset+32])
+
+	p.log.Info().
+		Uint64("superblock_number", sbNumber.Uint64()).
+		Uint64("game_index", games[0].Index.Uint64()).
+		Msg("Decoded last superblock number from L1 contract")
+
+	return sbNumber.Uint64(), nil
+}
+
 // GetLatestL1Block returns basic head info.
 func (p *EthPublisher) GetLatestL1Block(ctx context.Context) (*BlockInfo, error) {
 	head, err := p.client.HeaderByNumber(ctx, nil)

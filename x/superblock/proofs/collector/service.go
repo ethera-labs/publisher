@@ -17,4 +17,5 @@ type Service interface {
 	GetStats() map[string]interface{}
 	CountProvingJobs(ctx context.Context) (int, error)
 	ListQueuedJobs(ctx context.Context) ([]proofs.Status, error)
+	DeleteSubmissions(ctx context.Context, sbHash common.Hash) error
 }

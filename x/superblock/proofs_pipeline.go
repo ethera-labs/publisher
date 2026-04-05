@@ -32,9 +32,10 @@ type proofPipeline struct {
 }
 
 type proofJob struct {
-	hash      common.Hash
-	number    uint64
-	proofType string
+	hash       common.Hash
+	number     uint64
+	proofType  string
+	reusedFrom common.Hash // non-zero when submissions were borrowed from another superblock
 }
 
 func newProofPipeline(
@@ -114,6 +115,36 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 		Str("superblock_hash", sb.Hash.Hex()).
 		Int("submissions_found", len(proofSubs)).
 		Msg("Checking submissions for superblock")
+
+	// If no submissions match the current superblock hash, reuse submissions
+	// from any other superblock in the collector (PoC workaround for superblock
+	// number misalignment after publisher restarts).
+	var reusedFrom common.Hash
+	if len(proofSubs) == 0 {
+		allSubs := p.collector.GetStats()
+		totalSubmissions := allSubs["total_submissions"].(int)
+		if totalSubmissions > 0 {
+			allSuperblocks := allSubs["submissions_by_superblock"].(map[string]int)
+			for sbHash := range allSuperblocks {
+				otherHash := common.HexToHash(sbHash)
+				otherSubs, err := p.collector.ListSubmissions(ctx, otherHash)
+				if err == nil && len(otherSubs) > 0 {
+					p.log.Info().
+						Str("reusing_from_superblock", sbHash).
+						Int("submissions_count", len(otherSubs)).
+						Uint64("target_superblock", sb.Number).
+						Msg("Reusing submissions from different superblock")
+					for i := range otherSubs {
+						otherSubs[i].SuperblockNumber = sb.Number
+						otherSubs[i].SuperblockHash = sb.Hash
+					}
+					proofSubs = otherSubs
+					reusedFrom = otherHash
+					break
+				}
+			}
+		}
+	}
 
 	if len(proofSubs) == 0 {
 		p.log.Info().Uint64("superblock", sb.Number).Msg("No proof submissions available")
@@ -198,7 +229,7 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 	}
 
 	p.mu.Lock()
-	p.jobs[jobID] = proofJob{hash: sb.Hash, number: sb.Number, proofType: job.ProofType}
+	p.jobs[jobID] = proofJob{hash: sb.Hash, number: sb.Number, proofType: job.ProofType, reusedFrom: reusedFrom}
 	p.mu.Unlock()
 
 	p.log.Info().Str("job_id", jobID).Uint64("superblock", sb.Number).Msg("Proof job dispatched")
@@ -511,7 +542,11 @@ func (p *proofPipeline) handleCompleted(ctx context.Context, jobID string, job p
 		Msg("Proof job finished successfully")
 
 	outputs := status.SuperblockAggOutputs
-	p.enrichBootInfoChainIDs(ctx, job.hash, outputs)
+	enrichHash := job.hash
+	if (job.reusedFrom != common.Hash{}) {
+		enrichHash = job.reusedFrom
+	}
+	p.enrichBootInfoChainIDs(ctx, enrichHash, outputs)
 	proofBytes := status.Proof
 	if len(proofBytes) == 0 {
 		p.log.Warn().Str("job_id", jobID).Msg("Completed proof job returned empty proof")
@@ -550,6 +585,17 @@ func (p *proofPipeline) handleCompleted(ctx context.Context, jobID string, job p
 		st.State = proofs.StateComplete
 		st.Error = ""
 	})
+
+	// Clean up reused submissions from the original superblock hash after
+	// the final proof has been published to L1.
+	if (job.reusedFrom != common.Hash{}) {
+		p.log.Info().
+			Str("original_superblock_hash", job.reusedFrom.Hex()).
+			Uint64("published_superblock", job.number).
+			Msg("Cleaning up reused op-succinct submissions")
+		_ = p.collector.DeleteSubmissions(ctx, job.reusedFrom)
+	}
+
 	p.removeJob(jobID)
 	p.log.Info().Str("job_id", jobID).Uint64("superblock", job.number).Msg("Proof job completed and published")
 

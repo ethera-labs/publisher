@@ -20,4 +20,5 @@ type Publisher interface {
 	GetPublishStatus(ctx context.Context, txHash []byte) (*tx.TransactionStatus, error)
 	WatchSuperblocks(ctx context.Context) (<-chan *events.SuperblockEvent, error)
 	GetLatestL1Block(ctx context.Context) (*BlockInfo, error)
+	GetLastSuperblockNumber(ctx context.Context) (uint64, error)
 }

@@ -327,6 +327,19 @@ func (c *Coordinator) handleStartingState(ctx context.Context, currentSlot uint6
 	if err == nil && lastSuperblock != nil {
 		nextNumber = lastSuperblock.Number + 1
 		lastHash = lastSuperblock.Hash.Bytes()
+	} else if c.l1Publisher != nil {
+		// Memory store is empty (e.g. after restart). Read last published
+		// superblock number from the L1 contract to avoid resetting to 1.
+		l1Number, err := c.l1Publisher.GetLastSuperblockNumber(ctx)
+		if err != nil {
+			c.log.Warn().Err(err).Msg("Failed to read lastSuperblockNumber from L1; starting from 1")
+		} else if l1Number > 0 {
+			nextNumber = l1Number + 1
+			c.log.Info().
+				Uint64("l1_last_superblock", l1Number).
+				Uint64("next_superblock", nextNumber).
+				Msg("Recovered superblock number from L1 contract")
+		}
 	}
 
 	// Seed state machine with last known L2 heads from store so that

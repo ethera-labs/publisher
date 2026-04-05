@@ -99,6 +99,24 @@ func (b *DisputeGameFactoryBinding) BuildPublishWithProofCalldata(
 	return data, nil
 }
 
+// BuildGameCountCalldata encodes the calldata to read gameCount from the contract.
+func (b *DisputeGameFactoryBinding) BuildGameCountCalldata() ([]byte, error) {
+	data, err := b.abi.Pack("gameCount")
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack gameCount call: %w", err)
+	}
+	return data, nil
+}
+
+// BuildFindLatestGamesCalldata encodes the calldata to call findLatestGames.
+func (b *DisputeGameFactoryBinding) BuildFindLatestGamesCalldata(start *big.Int, n *big.Int) ([]byte, error) {
+	data, err := b.abi.Pack("findLatestGames", composeGameType, start, n)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pack findLatestGames call: %w", err)
+	}
+	return data, nil
+}
+
 func encodeExtraData(aggOutputs superblockAggregationOutputs, srp superRootProof, proof []byte) ([]byte, error) {
 	superblockType, _ := abi.NewType("tuple", "SuperblockAggregationOutputs", []abi.ArgumentMarshaling{
 		{Name: "superblockNumber", Type: "uint256"},

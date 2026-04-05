@@ -2,6 +2,7 @@ package contracts
 
 import (
 	"context"
+	"math/big"
 
 	"github.com/compose-network/publisher/x/superblock/proofs"
 
@@ -22,4 +23,10 @@ type Binding interface {
 		proof []byte,
 		outputs *proofs.SuperblockAggOutputs,
 	) ([]byte, error)
+
+	// BuildGameCountCalldata encodes the calldata to read gameCount from the contract.
+	BuildGameCountCalldata() ([]byte, error)
+
+	// BuildFindLatestGamesCalldata encodes the calldata to call findLatestGames.
+	BuildFindLatestGamesCalldata(start *big.Int, n *big.Int) ([]byte, error)
 }
