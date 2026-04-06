@@ -32,10 +32,11 @@ type proofPipeline struct {
 }
 
 type proofJob struct {
-	hash       common.Hash
-	number     uint64
-	proofType  string
-	reusedFrom common.Hash // non-zero when submissions were borrowed from another superblock
+	hash         common.Hash
+	number       uint64
+	proofType    string
+	consumedFrom []common.Hash        // source bucket hashes whose submissions were drawn into this proof
+	subs         []proofs.Submission  // submissions dispatched with this job (used for boot-info enrichment)
 }
 
 func newProofPipeline(
@@ -101,50 +102,18 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 		Str("superblock_hash", sb.Hash.Hex()).
 		Msg("HandleSuperblock called - checking for proofs")
 
-	// Initialize superblock status if it doesn't exist (collector now handles this automatically)
-
-	// TODO: For testing, can bypass missing proofs by creating dummy submissions
-	proofSubs, err := p.collector.ListSubmissions(ctx, sb.Hash)
-	if err != nil {
-		p.log.Warn().Err(err).Uint64("superblock", sb.Number).Msg("No submissions yet for superblock")
-		return err
-	}
+	// Aggregate the latest submission per chain across every bucket currently
+	// in the collector. We don't care which superblock hash each submission was
+	// originally attached to — once we have one submission per required chain,
+	// we dispatch them together and wipe the source buckets on completion.
+	proofSubs, consumedFrom := p.collectLatestPerChain(ctx, sb)
 
 	p.log.Info().
 		Uint64("superblock_number", sb.Number).
 		Str("superblock_hash", sb.Hash.Hex()).
 		Int("submissions_found", len(proofSubs)).
+		Int("source_buckets", len(consumedFrom)).
 		Msg("Checking submissions for superblock")
-
-	// If no submissions match the current superblock hash, reuse submissions
-	// from any other superblock in the collector (PoC workaround for superblock
-	// number misalignment after publisher restarts).
-	var reusedFrom common.Hash
-	if len(proofSubs) == 0 {
-		allSubs := p.collector.GetStats()
-		totalSubmissions := allSubs["total_submissions"].(int)
-		if totalSubmissions > 0 {
-			allSuperblocks := allSubs["submissions_by_superblock"].(map[string]int)
-			for sbHash := range allSuperblocks {
-				otherHash := common.HexToHash(sbHash)
-				otherSubs, err := p.collector.ListSubmissions(ctx, otherHash)
-				if err == nil && len(otherSubs) > 0 {
-					p.log.Info().
-						Str("reusing_from_superblock", sbHash).
-						Int("submissions_count", len(otherSubs)).
-						Uint64("target_superblock", sb.Number).
-						Msg("Reusing submissions from different superblock")
-					for i := range otherSubs {
-						otherSubs[i].SuperblockNumber = sb.Number
-						otherSubs[i].SuperblockHash = sb.Hash
-					}
-					proofSubs = otherSubs
-					reusedFrom = otherHash
-					break
-				}
-			}
-		}
-	}
 
 	if len(proofSubs) == 0 {
 		p.log.Info().Uint64("superblock", sb.Number).Msg("No proof submissions available")
@@ -229,11 +198,69 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 	}
 
 	p.mu.Lock()
-	p.jobs[jobID] = proofJob{hash: sb.Hash, number: sb.Number, proofType: job.ProofType, reusedFrom: reusedFrom}
+	p.jobs[jobID] = proofJob{
+		hash:         sb.Hash,
+		number:       sb.Number,
+		proofType:    job.ProofType,
+		consumedFrom: consumedFrom,
+		subs:         proofSubs,
+	}
 	p.mu.Unlock()
 
 	p.log.Info().Str("job_id", jobID).Uint64("superblock", sb.Number).Msg("Proof job dispatched")
 	return nil
+}
+
+// collectLatestPerChain walks every bucket currently in the collector and
+// returns the newest submission per chain ID (by ReceivedAt), rewritten to
+// point at the given superblock. The second return value is the list of
+// source bucket hashes visited — these are the buckets that should be wiped
+// once the resulting proof job finishes, so stale submissions don't pile up.
+func (p *proofPipeline) collectLatestPerChain(
+	ctx context.Context,
+	sb *store.Superblock,
+) ([]proofs.Submission, []common.Hash) {
+	stats := p.collector.GetStats()
+	buckets, ok := stats["submissions_by_superblock"].(map[string]int)
+	if !ok || len(buckets) == 0 {
+		return nil, nil
+	}
+
+	latest := make(map[uint32]proofs.Submission)
+	consumed := make([]common.Hash, 0, len(buckets))
+	for sbHashHex := range buckets {
+		bucketHash := common.HexToHash(sbHashHex)
+		subs, err := p.collector.ListSubmissions(ctx, bucketHash)
+		if err != nil {
+			p.log.Warn().
+				Err(err).
+				Str("bucket", sbHashHex).
+				Msg("Failed to list submissions while aggregating")
+			continue
+		}
+		if len(subs) == 0 {
+			continue
+		}
+		consumed = append(consumed, bucketHash)
+		for _, s := range subs {
+			existing, have := latest[s.ChainID]
+			if !have || s.ReceivedAt.After(existing.ReceivedAt) {
+				latest[s.ChainID] = s
+			}
+		}
+	}
+
+	if len(latest) == 0 {
+		return nil, nil
+	}
+
+	out := make([]proofs.Submission, 0, len(latest))
+	for _, s := range latest {
+		s.SuperblockNumber = sb.Number
+		s.SuperblockHash = sb.Hash
+		out = append(out, s)
+	}
+	return out, consumed
 }
 
 func (p *proofPipeline) requiredChainIDs(subs []proofs.Submission) []uint32 {
@@ -542,11 +569,7 @@ func (p *proofPipeline) handleCompleted(ctx context.Context, jobID string, job p
 		Msg("Proof job finished successfully")
 
 	outputs := status.SuperblockAggOutputs
-	enrichHash := job.hash
-	if (job.reusedFrom != common.Hash{}) {
-		enrichHash = job.reusedFrom
-	}
-	p.enrichBootInfoChainIDs(ctx, enrichHash, outputs)
+	p.enrichBootInfoChainIDs(job.subs, outputs)
 	proofBytes := status.Proof
 	if len(proofBytes) == 0 {
 		p.log.Warn().Str("job_id", jobID).Msg("Completed proof job returned empty proof")
@@ -586,14 +609,14 @@ func (p *proofPipeline) handleCompleted(ctx context.Context, jobID string, job p
 		st.Error = ""
 	})
 
-	// Clean up reused submissions from the original superblock hash after
-	// the final proof has been published to L1.
-	if (job.reusedFrom != common.Hash{}) {
+	// Wipe every bucket whose submissions were aggregated into this proof so
+	// stale per-chain entries don't accumulate in the collector.
+	for _, h := range job.consumedFrom {
 		p.log.Info().
-			Str("original_superblock_hash", job.reusedFrom.Hex()).
+			Str("source_superblock_hash", h.Hex()).
 			Uint64("published_superblock", job.number).
-			Msg("Cleaning up reused op-succinct submissions")
-		_ = p.collector.DeleteSubmissions(ctx, job.reusedFrom)
+			Msg("Cleaning up consumed op-succinct submissions")
+		_ = p.collector.DeleteSubmissions(ctx, h)
 	}
 
 	p.removeJob(jobID)
@@ -603,14 +626,13 @@ func (p *proofPipeline) handleCompleted(ctx context.Context, jobID string, job p
 }
 
 // enrichBootInfoChainIDs populates ChainId on each BootInfo entry by matching
-// rollupConfigHash against the original submissions which carry the chain ID.
-func (p *proofPipeline) enrichBootInfoChainIDs(ctx context.Context, sbHash common.Hash, outputs *proofs.SuperblockAggOutputs) {
+// rollupConfigHash against the submissions the proof job was dispatched with.
+func (p *proofPipeline) enrichBootInfoChainIDs(subs []proofs.Submission, outputs *proofs.SuperblockAggOutputs) {
 	if outputs == nil || len(outputs.BootInfo) == 0 {
 		return
 	}
-	subs, err := p.collector.ListSubmissions(ctx, sbHash)
-	if err != nil || len(subs) == 0 {
-		p.log.Warn().Err(err).Msg("Could not retrieve submissions to enrich boot info chain IDs")
+	if len(subs) == 0 {
+		p.log.Warn().Msg("No submissions available to enrich boot info chain IDs")
 		return
 	}
 	configToChain := make(map[common.Hash]uint64, len(subs))
