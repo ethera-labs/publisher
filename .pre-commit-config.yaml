@@ -1,23 +1,32 @@
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
+  - repo: local
     hooks:
-      - id: trailing-whitespace
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-added-large-files
-      - id: check-merge-conflict
-      - id: detect-private-key
+      - id: fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --all
+        args: []
+        types: [rust]
+        pass_filenames: false
 
-#  - repo: https://github.com/dnephin/pre-commit-golang
-#    rev: v0.5.1
-#    hooks:
-#      - id: go-fmt
-##      - id: go-vet
-#      - id: go-imports
-#      - id: go-cyclo
-#        args: [-over=28]
-#      - id: golangci-lint
-#      - id: go-mod-tidy
-#      - id: go-unit-tests
-##      - id: go-build
+      - id: clippy
+        name: cargo clippy
+        language: system
+        entry: cargo clippy --workspace --all-targets --
+        args: [-D, warnings]
+        types: [rust]
+        pass_filenames: false
+
+      - id: deny
+        name: cargo deny
+        language: system
+        entry: cargo deny check
+        pass_filenames: false
+        files: ^(Cargo\.(toml|lock)|crates/.+\.toml)$
+
+      - id: machete
+        name: cargo machete
+        language: system
+        entry: cargo machete crates/
+        pass_filenames: false
+        files: ^crates/.+\.toml$

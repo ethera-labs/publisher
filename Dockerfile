@@ -1,57 +1,33 @@
-# Build stage
-FROM golang:1.25-alpine@sha256:b6ed3fd0452c0e9bcdef5597f29cc1418f61672e9d3a2f55bf02e7222c014abd AS builder
-
-# Install dependencies
-RUN apk add --no-cache git make gcc musl-dev
-
-WORKDIR /build
-
-# Copy go mod files and local replace targets for dependency resolution
-COPY go.mod go.sum ./
-COPY compose-sdk/go.mod compose-sdk/go.sum ./compose-sdk/
-RUN go mod download
-
-COPY . .
-
-# Build with version info
-ARG VERSION=unknown
-ARG BUILD_TIME=unknown
-ARG GIT_COMMIT=unknown
-
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -trimpath \
-    -ldflags="-w -s -X main.Version=${VERSION} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}" \
-    -o publisher \
-    ./compose-publisher/
-
-# Runtime stage
-FROM alpine:3.22@sha256:4bcff63911fcb4448bd4fdacec207030997caf25e9bea4045fa6c8c44de311d1
-
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata
-
-# Create non-root user
-RUN addgroup -g 1000 publisher && \
-    adduser -u 1000 -G publisher -D publisher
+FROM rust:1.91-slim AS chef
 
 WORKDIR /app
+RUN cargo install cargo-chef --locked
 
-# Copy binary from builder
-COPY --from=builder /build/publisher /app/
-COPY --from=builder /build/compose-publisher/configs/config.yaml /app/configs/
+FROM chef AS planner
 
-# Create directory for logs
-RUN mkdir -p /app/logs && chown -R publisher:publisher /app
+COPY Cargo.lock Cargo.toml rust-toolchain.toml rustfmt.toml ./
+COPY bin ./bin
+COPY crates ./crates
+COPY specs ./specs
+RUN cargo chef prepare --recipe-path recipe.json
 
-# Switch to non-root user
-USER publisher
+FROM chef AS builder
 
-# Expose ports
-EXPOSE 8080 8081
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:8081/health || exit 1
+COPY Cargo.lock Cargo.toml rust-toolchain.toml rustfmt.toml ./
+COPY bin ./bin
+COPY crates ./crates
+COPY specs ./specs
+RUN cargo build --locked --release --bin publisher
 
-ENTRYPOINT ["/app/publisher"]
-CMD ["--config", "/app/configs/config.yaml"]
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/publisher /usr/local/bin/publisher
+
+ENTRYPOINT ["/usr/local/bin/publisher"]
