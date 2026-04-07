@@ -7,6 +7,10 @@ members = [
     "crates/metrics",
     "crates/coordinator",
     "crates/server",
+    # TODO: Remove vendored spec crates once native integration is complete.
+    "crates/spec",
+    "crates/spec-proto",
+    "crates/spec-sbcp",
 ]
 resolver = "2"
 
@@ -25,10 +29,10 @@ publisher-metrics = { path = "crates/metrics" }
 publisher-coordinator = { path = "crates/coordinator" }
 publisher-server = { path = "crates/server" }
 
-# Spec crates (protocol types and wire format)
-compose-spec = { path = "specs/compose/crates/compose" }
-compose-spec-proto = { path = "specs/compose/crates/proto" }
-compose-spec-sbcp = { path = "specs/compose/crates/sbcp" }
+# TODO: Remove vendored spec crates once native integration is complete.
+compose-spec = { path = "crates/spec" }
+compose-spec-proto = { path = "crates/spec-proto" }
+compose-spec-sbcp = { path = "crates/spec-sbcp" }
 
 # Async
 tokio = { version = "1.43", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

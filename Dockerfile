@@ -8,7 +8,6 @@ FROM chef AS planner
 COPY Cargo.lock Cargo.toml rust-toolchain.toml rustfmt.toml ./
 COPY bin ./bin
 COPY crates ./crates
-COPY specs ./specs
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
@@ -19,7 +18,6 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY Cargo.lock Cargo.toml rust-toolchain.toml rustfmt.toml ./
 COPY bin ./bin
 COPY crates ./crates
-COPY specs ./specs
 RUN cargo build --locked --release --bin publisher
 
 FROM debian:bookworm-slim AS runtime
