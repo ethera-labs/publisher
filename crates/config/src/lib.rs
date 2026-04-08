@@ -143,8 +143,14 @@ impl Config {
         };
 
         cfg.apply_env_overrides();
+        cfg.normalize();
         cfg.validate()?;
         Ok(cfg)
+    }
+
+    fn normalize(&mut self) {
+        normalize_addr(&mut self.server.listen_addr);
+        normalize_addr(&mut self.api.listen_addr);
     }
 
     fn apply_env_overrides(&mut self) {
@@ -188,6 +194,12 @@ impl Config {
             );
         }
         Ok(())
+    }
+}
+
+fn normalize_addr(addr: &mut String) {
+    if addr.starts_with(':') {
+        *addr = format!("0.0.0.0{addr}");
     }
 }
 
