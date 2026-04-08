@@ -1,0 +1,29 @@
+[package]
+name = "publisher"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "publisher"
+path = "src/main.rs"
+
+[dependencies]
+publisher-config.workspace = true
+publisher-coordinator.workspace = true
+publisher-metrics.workspace = true
+publisher-server.workspace = true
+publisher-tracing.workspace = true
+publisher-transport.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+clap.workspace = true
+compose-spec.workspace = true
+prometheus-client.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

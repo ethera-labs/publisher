@@ -1,79 +1,57 @@
-.PHONY: all build clean test coverage lint proto run docker help
+.PHONY: build release test test-verbose lint lint-fix fmt fmt-check machete deny doc ci ci-full run dev install-hooks pre-commit install-tools docker clean
 
-# Variables
-BINARY_NAME=publisher
-DOCKER_IMAGE=publisher
-VERSION=$(shell git describe --tags --always --dirty)
-BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
-GIT_COMMIT=$(shell git rev-parse HEAD)
-LDFLAGS=-ldflags "-X main.Version=${VERSION} \
-                 -X main.BuildTime=${BUILD_TIME} \
-                 -X main.GitCommit=${GIT_COMMIT}"
+build:
+	cargo build --workspace
 
-# Default target
-all: clean lint test build
+release:
+	cargo build --release -p publisher
 
-build: ## Build the application binary
-	@echo "Building..."
-	go build $(LDFLAGS) -o bin/$(BINARY_NAME) ./compose-publisher/
+test:
+	cargo test --workspace
 
-clean: ## Clean up build artifacts
-	@echo "Cleaning..."
-	rm -rf bin/ coverage.out coverage.html
+test-verbose:
+	cargo test --workspace -- --nocapture
 
-test: ## Run tests
-	@./scripts/test.sh
+lint:
+	cargo clippy --workspace --all-targets -- -D warnings
 
-coverage: ## Run tests with coverage
-	@./scripts/test.sh --coverage
+lint-fix:
+	cargo clippy --workspace --all-targets --fix --allow-staged -- -D warnings
 
-lint: ## Run linters
-	@echo "Running linters..."
-	golangci-lint run --timeout=5m
+fmt:
+	cargo fmt --all
 
-proto: ## Generate protobuf files
-	@echo "Generating protobuf files..."
-	cd proto && buf generate
-	@echo "Protobuf files generated at proto/rollup/v1/"
+fmt-check:
+	cargo fmt --all -- --check
 
-proto-clean: ## Clean generated protobuf files
-	@echo "Cleaning generated protobuf files..."
-	find proto -name "*.pb.go" -delete
+machete:
+	cargo machete
 
-proto-lint: ## Lint protobuf files
-	@echo "Linting protobuf files..."
-	cd proto && make proto-lint
+deny:
+	cargo deny check
 
-run: build ## Run the application
-	@echo "Running publisher..."
-	./bin/$(BINARY_NAME) --config compose-publisher/configs/config.yaml
+doc:
+	cargo doc --workspace --no-deps --open
 
-smoke: build ## Run smoke test against local API
-	@bash scripts/smoke.sh
+ci: fmt-check lint test
 
-run-dev: build ## Run in development mode
-	@echo "Running in development mode..."
-	./bin/$(BINARY_NAME) --config compose-publisher/configs/config.yaml --log-pretty --log-level debug
+ci-full: fmt-check lint test deny machete
 
-docker: ## Build the Docker image
-	@echo "Building Docker image..."
-	docker build -t $(DOCKER_IMAGE):$(VERSION) \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg BUILD_TIME=$(BUILD_TIME) \
-		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
-		-f Dockerfile .
-	docker tag $(DOCKER_IMAGE):$(VERSION) $(DOCKER_IMAGE):latest
+dev:
+	PUBLISHER_LOG_FORMAT=pretty PUBLISHER_LOG_LEVEL=debug cargo run -p publisher
 
-docker-compose: ## Run with docker-compose
-	@echo "Running with docker-compose..."
-	docker-compose up --build
+install-hooks:
+	pre-commit install
 
-docker-compose-down: ## Stop docker-compose
-	@echo "Stopping docker-compose..."
-	docker-compose down
+pre-commit:
+	pre-commit run --all-files
 
-help: ## Show this help message
-	@echo 'Usage: make [target]'
-	@echo ''
-	@echo 'Targets:'
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+install-tools:
+	cargo install cargo-deny --locked
+	cargo install cargo-machete --locked
+
+docker:
+	docker build -t publisher:latest .
+
+clean:
+	cargo clean

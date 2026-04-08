@@ -1,0 +1,99 @@
+[workspace]
+members = [
+    "bin/publisher",
+    "crates/tracing",
+    "crates/config",
+    "crates/transport",
+    "crates/metrics",
+    "crates/coordinator",
+    "crates/server",
+    # TODO: Remove vendored spec crates once native integration is complete.
+    "crates/spec",
+    "crates/spec-proto",
+    "crates/spec-sbcp",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.91"
+license = "MIT"
+
+[workspace.dependencies]
+# Internal crates
+publisher-tracing = { path = "crates/tracing" }
+publisher-config = { path = "crates/config" }
+publisher-transport = { path = "crates/transport" }
+publisher-metrics = { path = "crates/metrics" }
+publisher-coordinator = { path = "crates/coordinator" }
+publisher-server = { path = "crates/server" }
+
+# TODO: Remove vendored spec crates once native integration is complete.
+compose-spec = { path = "crates/spec" }
+compose-spec-proto = { path = "crates/spec-proto" }
+compose-spec-sbcp = { path = "crates/spec-sbcp" }
+
+# Async
+tokio = { version = "1.43", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# QUIC
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rcgen = "0.13"
+
+# HTTP
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Protobuf
+prost = "0.13"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+humantime = "2"
+humantime-serde = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Crypto
+sha2 = "0.10"
+hex = "0.4"
+
+# Misc
+bytes = "1.0"
+prometheus-client = "0.22"
+socket2 = "0.5"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_must_use = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+doc_markdown = "warn"
+uninlined_format_args = "warn"
+redundant_else = "warn"
+manual_let_else = "warn"
+use_self = "warn"
+semicolon_if_nothing_returned = "warn"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 1
