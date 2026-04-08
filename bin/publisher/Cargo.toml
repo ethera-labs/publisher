@@ -22,7 +22,6 @@ axum.workspace = true
 clap.workspace = true
 compose-spec.workspace = true
 prometheus-client.workspace = true
-serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

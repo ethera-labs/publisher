@@ -11,7 +11,7 @@ use prometheus_client::registry::Registry;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
-use publisher_config::PublisherArgs;
+use publisher_config::{Cli, Config};
 use publisher_coordinator::coordinator::Coordinator;
 use publisher_coordinator::handlers;
 use publisher_metrics::PublisherMetrics;
@@ -23,16 +23,18 @@ const PERIOD_DURATION: Duration = Duration::from_secs(12);
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = PublisherArgs::parse();
-    publisher_tracing::init(&args.log.level, &args.log.format);
+    let cli = Cli::parse();
+    let cfg = Config::load(&cli.config)?;
+
+    publisher_tracing::init(&cfg.log.level, cfg.log.pretty);
     info!("Starting Ethera Shared Publisher");
 
     let mut registry = Registry::default();
     let metrics = Arc::new(PublisherMetrics::new(&mut registry));
 
     let server = Arc::new(QuicServer::new(
-        args.quic.listen_addr.clone(),
-        args.quic.max_message_size,
+        cfg.server.listen_addr.clone(),
+        cfg.server.max_message_size,
     ));
     let coordinator = Arc::new(Coordinator::new(server.clone(), Some(metrics.clone())));
 
@@ -61,8 +63,8 @@ async fn main() -> Result<()> {
 
     let state = AppState::new(coordinator.clone()).with_registry(registry);
     let router = build_router(state);
-    let listener = TcpListener::bind(&args.api.listen_addr).await?;
-    info!(addr = %args.api.listen_addr, "HTTP API listening");
+    let listener = TcpListener::bind(&cfg.api.listen_addr).await?;
+    info!(addr = %cfg.api.listen_addr, "HTTP API listening");
 
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())

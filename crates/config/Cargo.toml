@@ -8,6 +8,14 @@ publish = false
 
 [dependencies]
 clap.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+humantime.workspace = true
+humantime-serde.workspace = true
+anyhow.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["humantime-serde"]
 
 [lints]
 workspace = true
