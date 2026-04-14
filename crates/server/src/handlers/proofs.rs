@@ -8,7 +8,7 @@ use compose_spec::ChainId;
 use serde::Deserialize;
 use tracing::warn;
 
-use publisher_coordinator::proof_types::{AggregationOutputs, MailboxInfo, ProofData};
+use publisher_coordinator::proof_types::{AggregationOutputs, ProofData};
 
 use crate::state::AppState;
 
@@ -33,14 +33,6 @@ struct IncomingAggregationOutputs {
 }
 
 #[derive(Debug, Deserialize)]
-struct IncomingMailboxInfo {
-    inbox_chains: Vec<B256>,
-    outbox_chains: Vec<B256>,
-    inbox_roots: Vec<B256>,
-    outbox_roots: Vec<B256>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct ProofSubmission {
     superblock_number: u64,
     chain_id: u64,
@@ -48,7 +40,6 @@ pub struct ProofSubmission {
     agg_vkey_hash: B256,
     #[serde(default)]
     proof: Option<Vec<u8>>,
-    mailbox_info: IncomingMailboxInfo,
 }
 
 pub async fn handle_submit_proof(
@@ -56,7 +47,6 @@ pub async fn handle_submit_proof(
     Json(body): Json<ProofSubmission>,
 ) -> StatusCode {
     let o = body.aggregation_outputs;
-    let m = body.mailbox_info;
 
     if o.l1_head == B256::ZERO {
         warn!(chain_id = body.chain_id, "Proof rejected: l1_head is zero");
@@ -88,12 +78,7 @@ pub async fn handle_submit_proof(
         },
         compressed_proof: body.proof.unwrap_or_default(),
         agg_vkey_hash: body.agg_vkey_hash,
-        mailbox_info: MailboxInfo {
-            inbox_chains: m.inbox_chains,
-            outbox_chains: m.outbox_chains,
-            inbox_roots: m.inbox_roots,
-            outbox_roots: m.outbox_roots,
-        },
+        mailbox_info: Default::default(),
     };
 
     state
