@@ -1,6 +1,6 @@
 //! HTTP router assembly.
 
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -14,6 +14,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ready", get(handlers::health::handle_ready))
         .route("/stats", get(handlers::health::handle_stats))
         .route("/metrics", get(handlers::metrics::handle_metrics))
+        .route(
+            "/v1/proofs/op-succinct",
+            post(handlers::proofs::handle_submit_proof),
+        )
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state)

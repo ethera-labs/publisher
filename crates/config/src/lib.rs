@@ -25,6 +25,18 @@ pub struct Config {
     pub consensus: ConsensusConfig,
     pub metrics: MetricsConfig,
     pub log: LogConfig,
+    pub settlement: SettlementConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SettlementConfig {
+    /// L1 JSON-RPC endpoint (e.g. `http://l1-rpc:8545`).
+    pub l1_rpc_url: String,
+    /// Deployed `ComposeL2OutputOracle` contract address.
+    pub l2oo_address: String,
+    /// Hex-encoded private key of the approved proposer account.
+    pub proposer_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -56,6 +68,10 @@ pub struct ApiConfig {
 pub struct ConsensusConfig {
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
+    #[serde(with = "humantime_serde")]
+    pub period_duration: Duration,
+    #[serde(with = "humantime_serde")]
+    pub proof_window: Duration,
     pub role: String,
 }
 
@@ -103,6 +119,8 @@ impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(60),
+            period_duration: Duration::from_secs(3840),
+            proof_window: Duration::from_secs(7200),
             role: "leader".into(),
         }
     }
@@ -166,6 +184,11 @@ impl Config {
         env_usize("API_MAX_HEADER_BYTES", &mut self.api.max_header_bytes);
 
         env_duration("CONSENSUS_TIMEOUT", &mut self.consensus.timeout);
+        env_duration(
+            "CONSENSUS_PERIOD_DURATION",
+            &mut self.consensus.period_duration,
+        );
+        env_duration("CONSENSUS_PROOF_WINDOW", &mut self.consensus.proof_window);
         env_str("CONSENSUS_ROLE", &mut self.consensus.role);
 
         env_bool("METRICS_ENABLED", &mut self.metrics.enabled);
@@ -176,6 +199,10 @@ impl Config {
         env_bool("LOG_PRETTY", &mut self.log.pretty);
         env_str("LOG_OUTPUT", &mut self.log.output);
         env_str("LOG_FILE", &mut self.log.file);
+
+        env_str("SETTLEMENT_L1_RPC_URL", &mut self.settlement.l1_rpc_url);
+        env_str("SETTLEMENT_L2OO_ADDRESS", &mut self.settlement.l2oo_address);
+        env_str("SETTLEMENT_PROPOSER_KEY", &mut self.settlement.proposer_key);
     }
 
     fn validate(&self) -> Result<()> {
@@ -259,6 +286,8 @@ mod tests {
         assert_eq!(cfg.api.idle_timeout, Duration::from_secs(120));
         assert_eq!(cfg.api.max_header_bytes, 1 << 20);
         assert_eq!(cfg.consensus.timeout, Duration::from_secs(60));
+        assert_eq!(cfg.consensus.period_duration, Duration::from_secs(3840));
+        assert_eq!(cfg.consensus.proof_window, Duration::from_secs(7200));
         assert_eq!(cfg.consensus.role, "leader");
         assert!(cfg.metrics.enabled);
         assert_eq!(cfg.metrics.port, 8081);

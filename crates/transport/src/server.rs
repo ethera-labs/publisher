@@ -141,8 +141,8 @@ async fn send_frame(
     codec: &LengthPrefixCodec,
     data: &[u8],
 ) -> Result<(), TransportError> {
-    let (mut send, _recv) = conn
-        .open_bi()
+    let mut send = conn
+        .open_uni()
         .await
         .map_err(|e| TransportError::Quic(e.to_string()))?;
     let frame = codec.encode(data)?;

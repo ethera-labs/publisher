@@ -68,6 +68,19 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"]
 thiserror = "2.0"
 anyhow = "1.0"
 
+# Alloy (Ethereum primitives, ABI encoding, L1 provider)
+alloy-primitives = { version = "1", features = ["serde"] }
+alloy-sol-types = "1"
+alloy = { version = "1", features = [
+    "sol-types",
+    "contract",
+    "providers",
+    "signers",
+    "signer-local",
+    "network",
+    "transport-http",
+] }
+
 # Crypto
 sha2 = "0.10"
 hex = "0.4"

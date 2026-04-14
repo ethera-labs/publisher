@@ -8,6 +8,7 @@ use prost::Message as _;
 use tracing::{error, info, warn};
 
 use crate::coordinator::Coordinator;
+use crate::proof_types::{AggregationOutputs, MailboxInfo, ProofData};
 
 pub async fn dispatch(coordinator: Arc<Coordinator>, client_id: String, data: Vec<u8>) {
     coordinator.inc_messages();
@@ -48,6 +49,9 @@ pub async fn dispatch(coordinator: Arc<Coordinator>, client_id: String, data: Ve
         Payload::MailboxMessage(mb) => {
             coordinator.handle_mailbox_relay(&mb).await;
         }
+        Payload::Proof(proof) => {
+            handle_proof(coordinator, proof).await;
+        }
         other => {
             warn!(client_id, payload_type = ?std::mem::discriminant(&other), "Unhandled payload");
         }
@@ -62,8 +66,10 @@ async fn handle_handshake(
     info!(client_id, requested_id = %req.client_id, "Handshake received");
 
     if !req.client_id.is_empty() {
-        let chain_id = parse_chain_id(&req.client_id);
-        coordinator.register_chain(client_id, chain_id).await;
+        match parse_chain_id(&req.client_id) {
+            Ok(chain_id) => coordinator.register_chain(client_id, chain_id).await,
+            Err(e) => warn!(client_id, error = %e, "Invalid chain ID in handshake"),
+        }
     }
 
     let resp = compose_spec_proto::Message {
@@ -82,14 +88,47 @@ async fn handle_handshake(
     }
 }
 
-fn parse_chain_id(client_id: &str) -> ChainId {
+/// Handles a `Proof` protobuf message received over QUIC. The `proof_data` field
+/// contains a minimal payload; full proof submissions with aggregation outputs
+/// should use the HTTP `/v1/proofs/op-succinct` endpoint instead.
+async fn handle_proof(coordinator: Arc<Coordinator>, proof: compose_spec_proto::Proof) {
+    let data = ProofData {
+        aggregation_outputs: AggregationOutputs::default(),
+        compressed_proof: proof.proof_data,
+        agg_vkey_hash: Default::default(),
+        mailbox_info: MailboxInfo::default(),
+    };
+    coordinator
+        .receive_proof(proof.superblock_number, proof.period_id, data)
+        .await;
+}
+
+pub fn parse_chain_id(client_id: &str) -> Result<ChainId, ParseChainIdError> {
     let num_str: String = client_id
         .chars()
         .take_while(|c| c.is_ascii_digit())
         .collect();
-    let id = num_str.parse::<u64>().unwrap_or(0);
-    ChainId::new(id)
+
+    if num_str.is_empty() {
+        return Err(ParseChainIdError(client_id.to_string()));
+    }
+
+    num_str
+        .parse::<u64>()
+        .map(ChainId::new)
+        .map_err(|_| ParseChainIdError(client_id.to_string()))
 }
+
+#[derive(Debug)]
+pub struct ParseChainIdError(pub String);
+
+impl std::fmt::Display for ParseChainIdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no numeric chain ID prefix in '{}'", self.0)
+    }
+}
+
+impl std::error::Error for ParseChainIdError {}
 
 #[cfg(test)]
 mod tests {
@@ -97,9 +136,12 @@ mod tests {
 
     #[test]
     fn parse_chain_id_numeric_prefix() {
-        assert_eq!(parse_chain_id("77777"), ChainId::new(77777));
-        assert_eq!(parse_chain_id("88888-sidecar"), ChainId::new(88888));
-        assert_eq!(parse_chain_id("abc"), ChainId::new(0));
-        assert_eq!(parse_chain_id(""), ChainId::new(0));
+        assert_eq!(parse_chain_id("77777").unwrap(), ChainId::new(77777));
+        assert_eq!(
+            parse_chain_id("88888-sidecar").unwrap(),
+            ChainId::new(88888)
+        );
+        assert!(parse_chain_id("abc").is_err());
+        assert!(parse_chain_id("").is_err());
     }
 }

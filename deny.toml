@@ -1,5 +1,8 @@
 [advisories]
 yanked = "warn"
+# paste is unmaintained (RUSTSEC-2024-0436) but pulled in transitively by
+# alloy-primitives with no available replacement. Ignore until alloy upgrades.
+ignore = [{ id = "RUSTSEC-2024-0436" }]
 
 [bans]
 multiple-versions = "warn"

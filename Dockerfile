@@ -1,4 +1,4 @@
-FROM rust:1.91-slim AS chef
+FROM rust:1.91-slim-bookworm AS chef
 
 WORKDIR /app
 RUN cargo install cargo-chef --locked
@@ -24,6 +24,7 @@ FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/publisher /usr/local/bin/publisher
