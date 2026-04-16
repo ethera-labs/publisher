@@ -44,4 +44,5 @@ func WithMetrics(enabled bool) Option {
 	return func(c *Config) {
 		c.MetricsEnabled = enabled
 	}
+
 }
