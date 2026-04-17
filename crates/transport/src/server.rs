@@ -218,8 +218,7 @@ async fn handle_connection(
         .await
         .map_err(|e| TransportError::Quic(e.to_string()))?;
 
-    let client_id = String::from_utf8(id_buf)
-        .map_err(|_| TransportError::Other("invalid UTF-8 in client ID".into()))?;
+    let client_id = String::from_utf8_lossy(&id_buf).into_owned();
     info!(client_id = %client_id, remote = %conn.remote_address(), "Sidecar connected");
 
     {
