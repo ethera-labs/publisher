@@ -13,7 +13,7 @@ just fmt            # cargo fmt --all (formats in place)
 just fmt-check      # check formatting without modifying
 just ci             # fmt-check + lint + test (full CI gate)
 just ci-full        # ci + cargo deny + cargo machete
-just dev            # run with PUBLISHER_LOG_FORMAT=pretty and PUBLISHER_LOG_LEVEL=debug
+just dev            # run with LOG_PRETTY=true and LOG_LEVEL=debug
 just run -- <args>  # cargo run -p publisher -- <args>
 ```
 
@@ -43,34 +43,37 @@ transactions (xTs) so that every involved chain either commits or aborts togethe
 3. Each sidecar votes via a `Vote` message. `Coordinator::handle_vote` collects votes: one `false` vote triggers
    immediate `Decided(false)`; unanimous `true` votes produce `Decided(true)`.
 4. After decision, `drain_queue` attempts to start the next queued xT whose chains are no longer locked.
-5. The publisher also broadcasts `StartPeriod` (every 12 s) and can broadcast `Rollback`.
+5. A background `timeout_loop` (1 s tick) calls `cleanup_expired_xts` to abort stale xTs that exceed
+   `consensus.timeout`, releasing their chains and draining the queue.
+6. The publisher also broadcasts `StartPeriod` (every 12 s) and can broadcast `Rollback`.
 
 ### Crate responsibilities
 
 | Crate                | Role                                                                                    |
 |----------------------|-----------------------------------------------------------------------------------------|
-| `bin/publisher`      | `main`: wires QUIC server → coordinator → HTTP API; runs the 12 s period loop           |
-| `crates/config`      | CLI + env-var config (`PUBLISHER_*`), loaded via `clap`                                 |
-| `crates/coordinator` | 2PC state machine (`CoordinatorState`), message dispatch (`handlers`)                   |
+| `bin/publisher`      | `main`: wires QUIC server, coordinator, HTTP API; period loop, timeout loop, shutdown   |
+| `crates/config`      | YAML config + env-var overrides (`SECTION_FIELD` convention, no prefix)                 |
+| `crates/coordinator` | 2PC state machine (`CoordinatorState`), message dispatch (`handlers`), xT timeout       |
 | `crates/transport`   | QUIC server (quinn), length-prefixed framing, self-signed TLS, per-connection callbacks |
 | `crates/server`      | Axum HTTP API: `/health`, `/ready`, `/stats`, `/metrics`                                |
 | `crates/metrics`     | Prometheus metrics via `prometheus-client`                                              |
 | `crates/tracing`     | `tracing-subscriber` setup (json or pretty format)                                      |
-| `crates/spec`        | Vendored domain types (`ChainId`, `PeriodId`, `XtRequest`, …)                           |
+| `crates/spec`        | Vendored domain types (`ChainId`, `PeriodId`, `XtRequest`, ...)                         |
 | `crates/spec-proto`  | Vendored protobuf types + conversion helpers                                            |
 | `crates/spec-sbcp`   | Vendored SBCP types: block structs, `generate_instance_id`, publisher/sequencer traits  |
 
 > The three `spec-*` crates are temporary vendored copies. The TODO in `Cargo.toml` indicates they will be removed once
-> native integration is complete.
+> native integration is complete. The specs repo also has `compose-spec-scp` (not yet vendored) which contains
+> `PublisherInstance` / `SequencerInstance` with full 2PC logic including mailbox simulation.
 
 ### Key internal invariants
 
-- **`CoordinatorState` is behind a single `Arc<RwLock<…>>`** — all mutations acquire a write lock; reads acquire a read
-  lock. Avoid holding the lock across `.await` points (the existing pattern drops it before broadcasting).
+- **`CoordinatorState` is behind a single `Arc<RwLock<...>>`** -- all mutations acquire a write lock; reads acquire a
+  read lock. Avoid holding the lock across `.await` points (the existing pattern drops it before broadcasting).
 - **Instance ID** is a deterministic hash of `(PeriodId, SequenceNumber, XtRequest)` computed by `generate_instance_id`
-  from `crates/spec-sbcp`. This is the canonical key for an xT across all participants.
+  from `crates/spec-sbcp`. Stored and looked up as `hex::encode(instance_id.as_bytes())`.
 - **Chain reservation** (`active_chains` map) prevents two concurrent xTs from touching the same chain. Chains are
-  reserved in `prepare_xt` and released in `record_vote` once a decision is reached.
+  reserved in `prepare_xt` and released in `record_vote` once a decision is reached (or on timeout).
 - **`/ready` returns 503** until at least one sidecar is connected (checked via `QuicServer::connection_count`).
 
 ### Wire protocol
@@ -81,11 +84,16 @@ encryption).
 
 ## Configuration
 
-All flags have `PUBLISHER_*` env-var overrides (via `clap`'s `env` feature):
+Configuration is loaded from a YAML file (`config.yaml` by default, override with `--config <path>`).
+Environment variables override YAML values (uppercase `SECTION_FIELD` convention, no prefix):
 
-| Flag                   | Env                            | Default        |
-|------------------------|--------------------------------|----------------|
-| `--server.listen-addr` | `PUBLISHER_SERVER_LISTEN_ADDR` | `0.0.0.0:8080` |
-| `--api.listen-addr`    | `PUBLISHER_API_LISTEN_ADDR`    | `0.0.0.0:8081` |
-| `--log.level`          | `PUBLISHER_LOG_LEVEL`          | `info`         |
-| `--log.pretty`         | `PUBLISHER_LOG_PRETTY`         | `false`        |
+| YAML Key                  | Env Override              | Default        |
+|---------------------------|---------------------------|----------------|
+| `server.listen_addr`      | `SERVER_LISTEN_ADDR`      | `0.0.0.0:8080` |
+| `server.max_message_size` | `SERVER_MAX_MESSAGE_SIZE` | `4194304`      |
+| `api.listen_addr`         | `API_LISTEN_ADDR`         | `0.0.0.0:8081` |
+| `api.request_timeout`     | `API_REQUEST_TIMEOUT`     | `15s`          |
+| `consensus.timeout`       | `CONSENSUS_TIMEOUT`       | `60s`          |
+| `metrics.enabled`         | `METRICS_ENABLED`         | `true`         |
+| `log.level`               | `LOG_LEVEL`               | `info`         |
+| `log.pretty`              | `LOG_PRETTY`              | `false`        |

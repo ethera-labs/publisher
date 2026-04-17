@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use compose_spec::{ChainId, PeriodId, SequenceNumber, SuperblockNumber, XtRequest};
 use compose_spec_sbcp::generate_instance_id;
@@ -191,6 +191,7 @@ pub struct Coordinator {
     pub(crate) state: Arc<RwLock<CoordinatorState>>,
     pub(crate) server: Arc<QuicServer>,
     pub(crate) metrics: Option<Arc<PublisherMetrics>>,
+    consensus_timeout: Duration,
     messages_processed: AtomicU64,
     broadcasts_sent: AtomicU64,
     start_time: Instant,
@@ -203,11 +204,16 @@ impl std::fmt::Debug for Coordinator {
 }
 
 impl Coordinator {
-    pub fn new(server: Arc<QuicServer>, metrics: Option<Arc<PublisherMetrics>>) -> Self {
+    pub fn new(
+        server: Arc<QuicServer>,
+        metrics: Option<Arc<PublisherMetrics>>,
+        consensus_timeout: Duration,
+    ) -> Self {
         Self {
             state: Arc::new(RwLock::new(CoordinatorState::new())),
             server,
             metrics,
+            consensus_timeout,
             messages_processed: AtomicU64::new(0),
             broadcasts_sent: AtomicU64::new(0),
             start_time: Instant::now(),
@@ -427,6 +433,54 @@ impl Coordinator {
                     error!(error = %e, "Failed to broadcast queued XT");
                 }
             }
+        }
+    }
+
+    /// Finds and removes expired xTs under a single write lock to prevent
+    /// racing with `handle_vote`. Broadcasts are sent after the lock is dropped.
+    pub async fn cleanup_expired_xts(&self) {
+        let expired: Vec<(String, Vec<u8>)> = {
+            let mut state = self.state.write().await;
+            let timed_out: Vec<String> = state
+                .active_xts
+                .iter()
+                .filter(|(_, xt)| xt.start_time.elapsed() > self.consensus_timeout)
+                .map(|(xt_id, _)| xt_id.clone())
+                .collect();
+
+            let mut result = Vec::with_capacity(timed_out.len());
+            for xt_id in timed_out {
+                state.release_chains(&xt_id);
+                state.active_xts.remove(&xt_id);
+
+                let instance_id_bytes = hex::decode(&xt_id).unwrap_or_default();
+                let msg = compose_spec_proto::Message {
+                    sender_id: "publisher".into(),
+                    payload: Some(compose_spec_proto::Payload::Decided(
+                        compose_spec_proto::Decided {
+                            instance_id: instance_id_bytes,
+                            decision: false,
+                        },
+                    )),
+                };
+                result.push((xt_id, msg.encode_to_vec()));
+            }
+            result
+        };
+
+        for (xt_id, data) in &expired {
+            warn!(xt_id, "xT timed out, deciding false");
+            if let Some(m) = &self.metrics {
+                m.xt_decided_abort_total.inc();
+            }
+            self.inc_broadcasts();
+            if let Err(e) = self.server.broadcast_raw(data, "").await {
+                error!(xt_id, error = %e, "Failed to broadcast timeout decision");
+            }
+        }
+
+        if !expired.is_empty() {
+            self.drain_queue().await;
         }
     }
 

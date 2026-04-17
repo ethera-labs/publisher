@@ -218,7 +218,8 @@ async fn handle_connection(
         .await
         .map_err(|e| TransportError::Quic(e.to_string()))?;
 
-    let client_id = String::from_utf8_lossy(&id_buf).to_string();
+    let client_id = String::from_utf8(id_buf)
+        .map_err(|_| TransportError::Other("invalid UTF-8 in client ID".into()))?;
     info!(client_id = %client_id, remote = %conn.remote_address(), "Sidecar connected");
 
     {
@@ -248,14 +249,20 @@ async fn handle_connection(
         };
 
         let mut header = [0u8; 4];
-        if recv.read_exact(&mut header).await.is_err() {
+        if let Err(e) = recv.read_exact(&mut header).await {
+            warn!(client_id = %client_id, error = %e, "Failed to read frame header");
             continue;
         }
-        let Ok(len) = codec.decode_length(&header) else {
-            continue;
+        let len = match codec.decode_length(&header) {
+            Ok(len) => len,
+            Err(e) => {
+                warn!(client_id = %client_id, error = %e, "Invalid frame length");
+                continue;
+            }
         };
         let mut payload = vec![0u8; len];
-        if recv.read_exact(&mut payload).await.is_err() {
+        if let Err(e) = recv.read_exact(&mut payload).await {
+            warn!(client_id = %client_id, error = %e, "Failed to read frame payload");
             continue;
         }
 

@@ -30,13 +30,21 @@ async fn main() -> Result<()> {
     info!("Starting Ethera Shared Publisher");
 
     let mut registry = Registry::default();
-    let metrics = Arc::new(PublisherMetrics::new(&mut registry));
+    let metrics = if cfg.metrics.enabled {
+        Some(Arc::new(PublisherMetrics::new(&mut registry)))
+    } else {
+        None
+    };
 
     let server = Arc::new(QuicServer::new(
         cfg.server.listen_addr.clone(),
         cfg.server.max_message_size,
     ));
-    let coordinator = Arc::new(Coordinator::new(server.clone(), Some(metrics.clone())));
+    let coordinator = Arc::new(Coordinator::new(
+        server.clone(),
+        metrics.clone(),
+        cfg.consensus.timeout,
+    ));
 
     let coord_for_handler = coordinator.clone();
     let on_message = Arc::new(move |client_id: String, data: Vec<u8>| {
@@ -48,12 +56,16 @@ async fn main() -> Result<()> {
 
     let metrics_connect = metrics.clone();
     let on_connect = Arc::new(move |_client_id: String| {
-        metrics_connect.connections_active.inc();
+        if let Some(m) = &metrics_connect {
+            m.connections_active.inc();
+        }
     });
 
     let metrics_disconnect = metrics.clone();
     let on_disconnect = Arc::new(move |_client_id: String| {
-        metrics_disconnect.connections_active.dec();
+        if let Some(m) = &metrics_disconnect {
+            m.connections_active.dec();
+        }
     });
 
     let _quic_handle = server.start(on_message, Some(on_connect), Some(on_disconnect))?;
@@ -61,8 +73,15 @@ async fn main() -> Result<()> {
     let coord_for_period = coordinator.clone();
     tokio::spawn(async move { period_loop(coord_for_period).await });
 
-    let state = AppState::new(coordinator.clone()).with_registry(registry);
-    let router = build_router(state);
+    let coord_for_timeout = coordinator.clone();
+    tokio::spawn(async move { timeout_loop(coord_for_timeout).await });
+
+    let state = if cfg.metrics.enabled {
+        AppState::new(coordinator.clone()).with_registry(registry)
+    } else {
+        AppState::new(coordinator.clone())
+    };
+    let router = build_router(state, cfg.api.request_timeout);
     let listener = TcpListener::bind(&cfg.api.listen_addr).await?;
     info!(addr = %cfg.api.listen_addr, "HTTP API listening");
 
@@ -91,6 +110,14 @@ async fn period_loop(coordinator: Arc<Coordinator>) {
         {
             error!(period_id = pid, error = %e, "Failed to broadcast period");
         }
+    }
+}
+
+async fn timeout_loop(coordinator: Arc<Coordinator>) {
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    loop {
+        interval.tick().await;
+        coordinator.cleanup_expired_xts().await;
     }
 }
 
