@@ -1,15 +1,29 @@
+# This section is considered when running `cargo deny check advisories`
+# More documentation for the advisories section can be found here:
+# https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
 [advisories]
 yanked = "warn"
 # paste is unmaintained (RUSTSEC-2024-0436) but pulled in transitively by
 # alloy-primitives with no available replacement. Ignore until alloy upgrades.
 ignore = [{ id = "RUSTSEC-2024-0436" }]
 
+# This section is considered when running `cargo deny check bans`.
+# More documentation about the 'bans' section can be found here:
+# https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
 [bans]
+# Lint level for when multiple versions of the same crate are detected
 multiple-versions = "warn"
+# Lint level for when a crate version requirement is `*`
 wildcards = "allow"
 highlight = "all"
+# List of crates to deny
 deny = [{ name = "openssl" }]
+# Certain crates/versions that will be skipped when doing duplicate detection.
 skip = []
+# Similarly to `skip` allows you to skip certain crates during duplicate
+# detection. Unlike skip, it also includes the entire tree of transitive
+# dependencies starting at the specified crate, up to a certain depth, which is
+# by default infinite
 skip-tree = []
 
 [licenses]
@@ -46,3 +60,4 @@ license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
 [sources]
 unknown-registry = "warn"
 unknown-git = "deny"
+unused-allowed-source = "allow"

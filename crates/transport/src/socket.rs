@@ -4,6 +4,7 @@ use std::io;
 use std::net::SocketAddr;
 
 use socket2::{Domain, Protocol, Socket, Type};
+use tracing::warn;
 
 const SOCKET_BUFFER_SIZE: usize = 7 * 1024 * 1024;
 
@@ -14,8 +15,12 @@ pub(crate) fn build_udp_socket(addr: SocketAddr) -> io::Result<std::net::UdpSock
         Domain::IPV4
     };
     let socket = Socket::new(domain, Type::DGRAM, Some(Protocol::UDP))?;
-    let _ = socket.set_recv_buffer_size(SOCKET_BUFFER_SIZE);
-    let _ = socket.set_send_buffer_size(SOCKET_BUFFER_SIZE);
+    if let Err(e) = socket.set_recv_buffer_size(SOCKET_BUFFER_SIZE) {
+        warn!(error = %e, "Failed to set recv buffer size");
+    }
+    if let Err(e) = socket.set_send_buffer_size(SOCKET_BUFFER_SIZE) {
+        warn!(error = %e, "Failed to set send buffer size");
+    }
     socket.bind(&addr.into())?;
     Ok(socket.into())
 }

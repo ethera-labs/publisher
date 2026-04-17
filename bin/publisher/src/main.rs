@@ -31,7 +31,11 @@ async fn main() -> Result<()> {
     info!("Starting Ethera Shared Publisher");
 
     let mut registry = Registry::default();
-    let metrics = Arc::new(PublisherMetrics::new(&mut registry));
+    let metrics = if cfg.metrics.enabled {
+        Some(Arc::new(PublisherMetrics::new(&mut registry)))
+    } else {
+        None
+    };
 
     let server = Arc::new(QuicServer::new(
         cfg.server.listen_addr.clone(),
@@ -64,7 +68,7 @@ async fn main() -> Result<()> {
 
     let coordinator_builder = Coordinator::new(
         server.clone(),
-        Some(metrics.clone()),
+        metrics.clone(),
         cfg.consensus.timeout,
         cfg.consensus.proof_window,
     );
@@ -87,7 +91,10 @@ async fn main() -> Result<()> {
     let coord_for_connect = coordinator.clone();
     let metrics_connect = metrics.clone();
     let on_connect = Arc::new(move |client_id: String| {
-        metrics_connect.connections_active.inc();
+        if let Some(m) = &metrics_connect {
+            m.connections_active.inc();
+        }
+
         let coord = coord_for_connect.clone();
         tokio::spawn(async move {
             match parse_chain_id(&client_id) {
@@ -101,7 +108,9 @@ async fn main() -> Result<()> {
 
     let metrics_disconnect = metrics.clone();
     let on_disconnect = Arc::new(move |_client_id: String| {
-        metrics_disconnect.connections_active.dec();
+        if let Some(m) = &metrics_disconnect {
+            m.connections_active.dec();
+        }
     });
 
     let _quic_handle = server.start(on_message, Some(on_connect), Some(on_disconnect))?;
@@ -113,8 +122,12 @@ async fn main() -> Result<()> {
     let coord_for_reaper = coordinator.clone();
     tokio::spawn(async move { reaper_loop(coord_for_reaper).await });
 
-    let state = AppState::new(coordinator.clone()).with_registry(registry);
-    let router = build_router(state);
+    let state = if cfg.metrics.enabled {
+        AppState::new(coordinator.clone()).with_registry(registry)
+    } else {
+        AppState::new(coordinator.clone())
+    };
+    let router = build_router(state, cfg.api.request_timeout);
     let listener = TcpListener::bind(&cfg.api.listen_addr).await?;
     info!(addr = %cfg.api.listen_addr, "HTTP API listening");
 

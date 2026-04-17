@@ -43,8 +43,6 @@ pub struct SettlementConfig {
 #[serde(default)]
 pub struct ServerConfig {
     pub listen_addr: String,
-    #[serde(with = "humantime_serde")]
-    pub write_timeout: Duration,
     pub max_message_size: usize,
 }
 
@@ -53,14 +51,7 @@ pub struct ServerConfig {
 pub struct ApiConfig {
     pub listen_addr: String,
     #[serde(with = "humantime_serde")]
-    pub read_header_timeout: Duration,
-    #[serde(with = "humantime_serde")]
-    pub read_timeout: Duration,
-    #[serde(with = "humantime_serde")]
-    pub write_timeout: Duration,
-    #[serde(with = "humantime_serde")]
-    pub idle_timeout: Duration,
-    pub max_header_bytes: usize,
+    pub request_timeout: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -72,15 +63,12 @@ pub struct ConsensusConfig {
     pub period_duration: Duration,
     #[serde(with = "humantime_serde")]
     pub proof_window: Duration,
-    pub role: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct MetricsConfig {
     pub enabled: bool,
-    pub port: u16,
-    pub path: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -88,15 +76,12 @@ pub struct MetricsConfig {
 pub struct LogConfig {
     pub level: String,
     pub pretty: bool,
-    pub output: String,
-    pub file: String,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen_addr: ":8080".into(),
-            write_timeout: Duration::from_secs(30),
             max_message_size: 4 * 1024 * 1024,
         }
     }
@@ -106,11 +91,7 @@ impl Default for ApiConfig {
     fn default() -> Self {
         Self {
             listen_addr: ":8081".into(),
-            read_header_timeout: Duration::from_secs(5),
-            read_timeout: Duration::from_secs(15),
-            write_timeout: Duration::from_secs(30),
-            idle_timeout: Duration::from_secs(120),
-            max_header_bytes: 1 << 20,
+            request_timeout: Duration::from_secs(15),
         }
     }
 }
@@ -121,18 +102,13 @@ impl Default for ConsensusConfig {
             timeout: Duration::from_secs(60),
             period_duration: Duration::from_secs(3840),
             proof_window: Duration::from_secs(7200),
-            role: "leader".into(),
         }
     }
 }
 
 impl Default for MetricsConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            port: 8081,
-            path: "/metrics".into(),
-        }
+        Self { enabled: true }
     }
 }
 
@@ -141,8 +117,6 @@ impl Default for LogConfig {
         Self {
             level: "info".into(),
             pretty: false,
-            output: "stdout".into(),
-            file: String::new(),
         }
     }
 }
@@ -173,15 +147,10 @@ impl Config {
 
     fn apply_env_overrides(&mut self) {
         env_str("SERVER_LISTEN_ADDR", &mut self.server.listen_addr);
-        env_duration("SERVER_WRITE_TIMEOUT", &mut self.server.write_timeout);
         env_usize("SERVER_MAX_MESSAGE_SIZE", &mut self.server.max_message_size);
 
         env_str("API_LISTEN_ADDR", &mut self.api.listen_addr);
-        env_duration("API_READ_HEADER_TIMEOUT", &mut self.api.read_header_timeout);
-        env_duration("API_READ_TIMEOUT", &mut self.api.read_timeout);
-        env_duration("API_WRITE_TIMEOUT", &mut self.api.write_timeout);
-        env_duration("API_IDLE_TIMEOUT", &mut self.api.idle_timeout);
-        env_usize("API_MAX_HEADER_BYTES", &mut self.api.max_header_bytes);
+        env_duration("API_REQUEST_TIMEOUT", &mut self.api.request_timeout);
 
         env_duration("CONSENSUS_TIMEOUT", &mut self.consensus.timeout);
         env_duration(
@@ -189,16 +158,11 @@ impl Config {
             &mut self.consensus.period_duration,
         );
         env_duration("CONSENSUS_PROOF_WINDOW", &mut self.consensus.proof_window);
-        env_str("CONSENSUS_ROLE", &mut self.consensus.role);
 
         env_bool("METRICS_ENABLED", &mut self.metrics.enabled);
-        env_u16("METRICS_PORT", &mut self.metrics.port);
-        env_str("METRICS_PATH", &mut self.metrics.path);
 
         env_str("LOG_LEVEL", &mut self.log.level);
         env_bool("LOG_PRETTY", &mut self.log.pretty);
-        env_str("LOG_OUTPUT", &mut self.log.output);
-        env_str("LOG_FILE", &mut self.log.file);
 
         env_str("SETTLEMENT_L1_RPC_URL", &mut self.settlement.l1_rpc_url);
         env_str("SETTLEMENT_L2OO_ADDRESS", &mut self.settlement.l2oo_address);
@@ -214,12 +178,14 @@ impl Config {
             !self.consensus.timeout.is_zero(),
             "consensus.timeout must be positive"
         );
-        if self.metrics.enabled {
-            anyhow::ensure!(
-                self.metrics.port > 0,
-                "metrics.port must be > 0 when metrics enabled"
-            );
-        }
+        anyhow::ensure!(
+            !self.consensus.period_duration.is_zero(),
+            "consensus.period_duration must be positive"
+        );
+        anyhow::ensure!(
+            !self.consensus.proof_window.is_zero(),
+            "consensus.proof_window must be positive"
+        );
         Ok(())
     }
 }
@@ -262,14 +228,6 @@ fn env_usize(key: &str, target: &mut usize) {
     }
 }
 
-fn env_u16(key: &str, target: &mut u16) {
-    if let Ok(val) = std::env::var(key) {
-        if let Ok(n) = val.parse() {
-            *target = n;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,23 +236,15 @@ mod tests {
     fn defaults() {
         let cfg = Config::default();
         assert_eq!(cfg.server.listen_addr, ":8080");
-        assert_eq!(cfg.server.write_timeout, Duration::from_secs(30));
+        assert_eq!(cfg.server.max_message_size, 4 * 1024 * 1024);
         assert_eq!(cfg.api.listen_addr, ":8081");
-        assert_eq!(cfg.api.read_header_timeout, Duration::from_secs(5));
-        assert_eq!(cfg.api.read_timeout, Duration::from_secs(15));
-        assert_eq!(cfg.api.write_timeout, Duration::from_secs(30));
-        assert_eq!(cfg.api.idle_timeout, Duration::from_secs(120));
-        assert_eq!(cfg.api.max_header_bytes, 1 << 20);
+        assert_eq!(cfg.api.request_timeout, Duration::from_secs(15));
         assert_eq!(cfg.consensus.timeout, Duration::from_secs(60));
         assert_eq!(cfg.consensus.period_duration, Duration::from_secs(3840));
         assert_eq!(cfg.consensus.proof_window, Duration::from_secs(7200));
-        assert_eq!(cfg.consensus.role, "leader");
         assert!(cfg.metrics.enabled);
-        assert_eq!(cfg.metrics.port, 8081);
-        assert_eq!(cfg.metrics.path, "/metrics");
         assert_eq!(cfg.log.level, "info");
         assert!(!cfg.log.pretty);
-        assert_eq!(cfg.log.output, "stdout");
     }
 
     #[test]
@@ -302,18 +252,19 @@ mod tests {
         let yaml = r#"
 server:
   listen_addr: ":9090"
-  write_timeout: 10s
 consensus:
   timeout: 3s
-  role: leader
+  period_duration: 30s
+  proof_window: 5m
 log:
   level: debug
   pretty: true
 "#;
         let cfg: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.server.listen_addr, ":9090");
-        assert_eq!(cfg.server.write_timeout, Duration::from_secs(10));
         assert_eq!(cfg.consensus.timeout, Duration::from_secs(3));
+        assert_eq!(cfg.consensus.period_duration, Duration::from_secs(30));
+        assert_eq!(cfg.consensus.proof_window, Duration::from_secs(300));
         assert_eq!(cfg.log.level, "debug");
         assert!(cfg.log.pretty);
         assert_eq!(cfg.api.listen_addr, ":8081");

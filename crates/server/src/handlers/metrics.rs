@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use prometheus_client::encoding::text::encode;
+use tracing::error;
 
 use crate::state::AppState;
 
@@ -14,7 +15,8 @@ pub async fn handle_metrics(State(state): State<AppState>) -> impl IntoResponse 
 
     let registry = registry.lock().await;
     let mut body = String::new();
-    if encode(&mut body, &registry).is_err() {
+    if let Err(e) = encode(&mut body, &registry) {
+        error!(error = %e, "Failed to encode metrics");
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to encode metrics".to_string(),
