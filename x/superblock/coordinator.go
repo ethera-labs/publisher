@@ -107,7 +107,7 @@ func NewCoordinator(
 	c.setupStateCallbacks()
 	c.setupConsensusCallbacks()
 
-	if config.Proofs.Enabled && collector != nil && prover != nil {
+	if config.Proofs.Enabled && collector != nil && (prover != nil || config.Proofs.BypassProver) {
 		c.proofs = newProofPipeline(
 			config.Proofs,
 			collector,

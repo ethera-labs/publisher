@@ -196,6 +196,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("proofs.prover.poll_interval", "5s") // TODO: testing
 	v.SetDefault("proofs.prover.proof_type", "groth16")
 	v.SetDefault("proofs.require_proof", true)
+	v.SetDefault("proofs.bypass_prover", false)
 }
 
 // Validate validates the configuration

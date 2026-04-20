@@ -46,7 +46,12 @@ func newProofPipeline(
 	publishFn func(context.Context, *store.Superblock, []byte, *proofs.SuperblockAggOutputs) error,
 	log zerolog.Logger,
 ) *proofPipeline {
-	if !cfg.Enabled || collector == nil || prover == nil {
+	if !cfg.Enabled || collector == nil {
+		return nil
+	}
+	// When BypassProver is set, the superblock-prover HTTP client is not required;
+	// outputs/proof are synthesized locally.
+	if prover == nil && !cfg.BypassProver {
 		return nil
 	}
 	poll := cfg.Prover.PollInterval
@@ -74,9 +79,19 @@ func (p *proofPipeline) Start(ctx context.Context) {
 	p.log.Info().
 		Str("proof_type", p.cfg.Prover.ProofType).
 		Dur("poll_interval", p.pollEvery).
+		Bool("bypass_prover", p.cfg.BypassProver).
 		Msg("Proof pipeline enabled")
 
-	go p.pollLoop(ctx)
+	if p.cfg.BypassProver {
+		p.log.Warn().
+			Msg("BypassProver is enabled: superblock-prover will be skipped and a mock proof " +
+				"will be published to L1. Do not use in production.")
+	}
+
+	// Polling the superblock-prover only makes sense when there is a real prover.
+	if !p.cfg.BypassProver {
+		go p.pollLoop(ctx)
+	}
 }
 
 func (p *proofPipeline) Stop() {
@@ -192,6 +207,10 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 			}
 		})
 		return nil
+	}
+
+	if p.cfg.BypassProver {
+		return p.handleBypass(ctx, sb, proofSubs, required)
 	}
 
 	// Rate limiter: Check if there's already a proof in StateProving
@@ -627,6 +646,87 @@ func (p *proofPipeline) missingChains(required []uint32, subs []proofs.Submissio
 		}
 	}
 	return out
+}
+
+// handleBypass synthesizes superblock aggregation outputs from the collected per-rollup
+// submissions and publishes the superblock to L1 with a deterministic mock proof,
+// skipping the superblock-prover entirely. Used only when cfg.BypassProver is set.
+func (p *proofPipeline) handleBypass(
+	ctx context.Context,
+	sb *store.Superblock,
+	proofSubs []proofs.Submission,
+	required []uint32,
+) error {
+	outputs := buildMockAggOutputs(sb, proofSubs)
+	proof := mockProofBytes()
+
+	_ = p.collector.UpdateStatus(ctx, sb.Hash, func(st *proofs.Status) {
+		st.Required = required
+		st.SuperblockNumber = sb.Number
+		st.SuperblockHash = sb.Hash
+		st.State = proofs.StateProving
+		st.JobID = "bypass"
+		st.Error = ""
+	})
+
+	p.log.Info().
+		Uint64("superblock", sb.Number).
+		Str("superblock_hash", sb.Hash.Hex()).
+		Int("boot_info_entries", len(outputs.BootInfo)).
+		Int("mock_proof_bytes", len(proof)).
+		Msg("BypassProver: publishing superblock with mock proof")
+
+	if p.publishFn == nil {
+		return fmt.Errorf("bypass: publishFn is not configured")
+	}
+
+	sb.Proof = append([]byte(nil), proof...)
+	if err := p.sbStore.StoreSuperblock(ctx, sb); err != nil {
+		p.log.Warn().Err(err).Uint64("superblock", sb.Number).Msg("Failed to persist superblock with mock proof")
+	}
+
+	if err := p.publishFn(ctx, sb, proof, outputs); err != nil {
+		_ = p.collector.UpdateStatus(ctx, sb.Hash, func(st *proofs.Status) {
+			st.State = proofs.StateFailed
+			st.Error = err.Error()
+		})
+		return fmt.Errorf("bypass publish: %w", err)
+	}
+
+	_ = p.collector.UpdateStatus(ctx, sb.Hash, func(st *proofs.Status) {
+		st.State = proofs.StateComplete
+		st.Error = ""
+	})
+
+	return nil
+}
+
+// buildMockAggOutputs maps each collected per-rollup AggregationOutputs into the
+// SuperblockAggOutputs shape the L1 dispute-game factory binding expects. The prover
+// normally returns this; here we construct it locally from the submissions.
+func buildMockAggOutputs(sb *store.Superblock, subs []proofs.Submission) *proofs.SuperblockAggOutputs {
+	bootInfo := make([]proofs.BootInfo, 0, len(subs))
+	for _, sub := range subs {
+		bootInfo = append(bootInfo, proofs.BootInfo{
+			L1Head:           sub.Aggregation.L1Head.Hex(),
+			L2PreRoot:        sub.Aggregation.L2PreRoot.Hex(),
+			L2PostRoot:       sub.Aggregation.L2PostRoot.Hex(),
+			L2BlockNumber:    sub.Aggregation.L2BlockNumber,
+			RollupConfigHash: sub.Aggregation.RollupConfigHash.Hex(),
+		})
+	}
+	return &proofs.SuperblockAggOutputs{
+		SuperblockNumber:          fmt.Sprintf("%d", sb.Number),
+		ParentSuperblockBatchHash: sb.ParentHash.Hex(),
+		BootInfo:                  bootInfo,
+	}
+}
+
+// mockProofBytes returns a fixed, non-empty byte blob used as a placeholder proof
+// when BypassProver is enabled. Contents are intentionally recognizable so that
+// anyone inspecting an on-chain tx can tell this was not a real SNARK.
+func mockProofBytes() []byte {
+	return []byte("MOCK_PROOF_BYPASS_PROVER_DEV_ONLY")
 }
 
 func (p *proofPipeline) logStats() {

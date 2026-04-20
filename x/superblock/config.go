@@ -57,6 +57,11 @@ type ProofsConfig struct {
 
 	// If false, SP may fall back to publishing without a proof on prover failure.
 	RequireProof bool `mapstructure:"require_proof" yaml:"require_proof"`
+
+	// BypassProver skips the superblock-prover HTTP dispatch and instead synthesizes
+	// aggregation outputs from collected per-rollup submissions plus a mock proof,
+	// publishing directly to L1. Dev/testing use only.
+	BypassProver bool `mapstructure:"bypass_prover" yaml:"bypass_prover"`
 }
 
 // DefaultProofsConfig returns sensible defaults.

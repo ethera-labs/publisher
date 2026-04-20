@@ -189,3 +189,9 @@ proofs:
   # the superblock is submitted to the L1 contract.
   # ENV: PROOFS_REQUIRE_PROOF
   require_proof: true
+
+  # Dev/testing bypass: when true, skip the superblock-prover HTTP dispatch and
+  # instead synthesize the aggregation outputs from collected per-rollup submissions
+  # plus a deterministic mock proof, and publish directly to L1. Disabled by default.
+  # ENV: PROOFS_BYPASS_PROVER
+  bypass_prover: false
