@@ -3,7 +3,7 @@ module github.com/compose-network/publisher
 go 1.24.5
 
 require (
-	github.com/ethera-labs/registry v0.2.1
+	github.com/ethera-labs/registry v0.2.2
 	github.com/ethereum/go-ethereum v1.16.4
 	github.com/fjl/gencodec v0.1.0
 	github.com/google/uuid v1.6.0
