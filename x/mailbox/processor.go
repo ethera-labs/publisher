@@ -208,11 +208,15 @@ func (p *Processor) processMailboxRead(
 		return
 	}
 
+	// Receiver is sourced from the header so it matches what the cross-chain
+	// writer populated (which in UniversalBridgeMailbox is the user for
+	// SEND_TOKENS and the bridge for ACK). Using op.From would always be the
+	// calling bridge and mis-match CIRC messages with receiver=user.
 	dep := CrossRollupDependency{
 		SourceChainID: call.ChainSrc.Uint64(),
 		DestChainID:   call.ChainDest.Uint64(),
 		Sender:        call.Sender,
-		Receiver:      op.From,
+		Receiver:      call.Receiver,
 		SessionID:     call.SessionId,
 		Label:         call.Label,
 		RequiredData:  true,
@@ -251,10 +255,17 @@ func (p *Processor) processMailboxWrite(
 		return
 	}
 
+	// Sender is taken from the ABI-decoded header, not op.From. The two match
+	// for SEND_TOKENS (bridge writes itself as sender), but for ACK the bridge
+	// constructs header.sender = the user on the remote chain so the receiving
+	// bridge's checkAck can locate the inbox entry by (user, bridge) key.
+	// UniversalBridgeMailbox.writeMessage currently overrides header.sender
+	// with msg.sender on-chain — that drops this information, so the
+	// coordinator reconstructs it from the calldata here.
 	msg := CrossRollupMessage{
 		SourceChainID: call.ChainSrc.Uint64(),
 		DestChainID:   call.ChainDest.Uint64(),
-		Sender:        op.From,
+		Sender:        call.Sender,
 		Receiver:      call.Receiver,
 		SessionID:     call.SessionId,
 		Data:          call.Data,
@@ -422,7 +433,7 @@ func (p *Processor) CreatePutInboxTx(dep CrossRollupDependency, nonce uint64) (*
 		dep.Sender,
 		dep.Receiver,
 		dep.SessionID,
-		dep.Label,
+		string(dep.Label),
 		dep.Data,
 	)
 	if err != nil {
@@ -435,15 +446,19 @@ func (p *Processor) CreatePutInboxTx(dep CrossRollupDependency, nonce uint64) (*
 	}
 
 	txData := &types.DynamicFeeTx{
-		ChainID:    new(big.Int).SetUint64(p.chainID),
-		Nonce:      nonce,
-		GasTipCap:  big.NewInt(1000000000),
-		GasFeeCap:  big.NewInt(20000000000),
-		Gas:        500000,
-		To:         &mailboxAddr,
-		Value:      big.NewInt(0),
-		Data:       callData,
-		AccessList: nil,
+		ChainID:   new(big.Int).SetUint64(p.chainID),
+		Nonce:     nonce,
+		GasTipCap: big.NewInt(1_000_000_000),
+		GasFeeCap: big.NewInt(20_000_000_000),
+		// putInbox on UniversalBridgeMailbox writes one inbox slot, one key flag
+		// and mutates the inbox-root hash. With a 320-byte payload (ERC-20 send
+		// envelope: chainid + address + amount + name/symbol/decimals) the
+		// observed cost is ~520k gas, so we budget 2M to leave headroom for
+		// larger payloads.
+		Gas:   2_000_000,
+		To:    &mailboxAddr,
+		Value: big.NewInt(0),
+		Data:  callData,
 	}
 
 	tx := types.NewTx(txData)
@@ -579,6 +594,23 @@ func (p *Processor) logCIRCTimeout(xtID *rollupv1.XtID, sourceChainID string) er
 	return fmt.Errorf("timeout waiting for CIRC message from chain %s", sourceChainID)
 }
 
+// messageHeaderABI mirrors IUniversalBridgeMailbox.MessageHeader so the
+// go-ethereum ABI decoder can unpack the tuple directly by field name.
+type messageHeaderABI struct {
+	ChainSrc  *big.Int
+	ChainDest *big.Int
+	Sender    common.Address
+	Receiver  common.Address
+	SessionId *big.Int
+	Label     string
+}
+
+// messageABI mirrors IUniversalBridgeMailbox.Message = (MessageHeader, bytes).
+type messageABI struct {
+	Header  messageHeaderABI
+	Payload []byte
+}
+
 func (p *Processor) parseMailboxCall(callData []byte) (*MailboxCall, error) {
 	if len(callData) < 4 {
 		return nil, fmt.Errorf("invalid call data length")
@@ -590,66 +622,78 @@ func (p *Processor) parseMailboxCall(callData []byte) (*MailboxCall, error) {
 		return nil, err
 	}
 
-	if bytes.Equal(methodSig, parsedABI.Methods["read"].ID) {
-		call, err := p.parseReadCall(callData[4:])
+	if bytes.Equal(methodSig, parsedABI.Methods["readMessage"].ID) {
+		call, err := p.parseReadCall(parsedABI, callData[4:])
 		if err != nil {
 			return nil, err
 		}
 		call.IsRead = true
-		call.ChainSrc = call.ChainMessageSender
-		call.ChainDest = new(big.Int).SetUint64(p.chainID)
 		return call, nil
 	}
 
-	if bytes.Equal(methodSig, parsedABI.Methods["write"].ID) {
-		call, err := p.parseWriteCall(callData[4:])
+	if bytes.Equal(methodSig, parsedABI.Methods["writeMessage"].ID) {
+		call, err := p.parseWriteCall(parsedABI, callData[4:])
 		if err != nil {
 			return nil, err
 		}
 		call.IsWrite = true
-		call.ChainSrc = new(big.Int).SetUint64(p.chainID)
-		call.ChainDest = call.ChainMessageRecipient
 		return call, nil
 	}
 
 	return nil, fmt.Errorf("unknown mailbox method")
 }
 
-func (p *Processor) parseReadCall(data []byte) (*MailboxCall, error) {
-	parsedABI, _ := abi.JSON(strings.NewReader(mailboxABI))
-	values, err := parsedABI.Methods["read"].Inputs.Unpack(data)
+func (p *Processor) parseReadCall(parsedABI abi.ABI, data []byte) (*MailboxCall, error) {
+	inputs := parsedABI.Methods["readMessage"].Inputs
+	values, err := inputs.Unpack(data)
 	if err != nil {
 		return nil, err
 	}
-
-	call := &MailboxCall{
-		ChainMessageSender: values[0].(*big.Int),
-		Sender:             values[1].(common.Address),
-		SessionId:          values[2].(*big.Int),
-		Label:              values[3].([]byte),
+	var decoded struct {
+		Header messageHeaderABI
 	}
-	call.ChainSrc = call.ChainMessageSender
-	call.ChainDest = new(big.Int).SetUint64(p.chainID)
-	return call, nil
+	if err := inputs.Copy(&decoded, values); err != nil {
+		return nil, err
+	}
+
+	h := decoded.Header
+	return &MailboxCall{
+		ChainMessageSender:    h.ChainSrc,
+		ChainMessageRecipient: h.ChainDest,
+		Sender:                h.Sender,
+		Receiver:              h.Receiver,
+		SessionId:             h.SessionId,
+		Label:                 []byte(h.Label),
+		ChainSrc:              h.ChainSrc,
+		ChainDest:             new(big.Int).SetUint64(p.chainID),
+	}, nil
 }
 
-func (p *Processor) parseWriteCall(data []byte) (*MailboxCall, error) {
-	parsedABI, _ := abi.JSON(strings.NewReader(mailboxABI))
-	values, err := parsedABI.Methods["write"].Inputs.Unpack(data)
+func (p *Processor) parseWriteCall(parsedABI abi.ABI, data []byte) (*MailboxCall, error) {
+	inputs := parsedABI.Methods["writeMessage"].Inputs
+	values, err := inputs.Unpack(data)
 	if err != nil {
 		return nil, err
 	}
-
-	call := &MailboxCall{
-		ChainMessageRecipient: values[0].(*big.Int),
-		Receiver:              values[1].(common.Address),
-		SessionId:             values[2].(*big.Int),
-		Label:                 values[3].([]byte),
-		Data:                  values[4].([]byte),
+	var decoded struct {
+		Message messageABI
 	}
-	call.ChainSrc = new(big.Int).SetUint64(p.chainID)
-	call.ChainDest = call.ChainMessageRecipient
-	return call, nil
+	if err := inputs.Copy(&decoded, values); err != nil {
+		return nil, err
+	}
+
+	h := decoded.Message.Header
+	return &MailboxCall{
+		ChainMessageSender:    h.ChainSrc,
+		ChainMessageRecipient: h.ChainDest,
+		Sender:                h.Sender,
+		Receiver:              h.Receiver,
+		SessionId:             h.SessionId,
+		Label:                 []byte(h.Label),
+		Data:                  decoded.Message.Payload,
+		ChainSrc:              new(big.Int).SetUint64(p.chainID),
+		ChainDest:             h.ChainDest,
+	}, nil
 }
 
 func (p *Processor) isMailboxAddress(addr common.Address) bool {
