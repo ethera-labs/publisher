@@ -268,10 +268,12 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 }
 
 func (p *proofPipeline) requiredChainIDs(subs []proofs.Submission) []uint32 {
-	// TODO: For testing, can temporarily comment out the config check and return any chain IDs from submissions
-	// if len(p.cfg.Collector.RequiredChainIDs) > 0 {
-	//	 return append([]uint32(nil), p.cfg.Collector.RequiredChainIDs...)
-	// }
+	// When operators have configured the expected chain IDs, honor them. This is what makes
+	// `require_all_chains` meaningful — without an explicit list, "required" would otherwise
+	// be derived from the submissions already in hand and `isReady` would be a tautology.
+	if len(p.cfg.Collector.RequiredChainIDs) > 0 {
+		return append([]uint32(nil), p.cfg.Collector.RequiredChainIDs...)
+	}
 	seen := make(map[uint32]struct{}, len(subs))
 	for _, s := range subs {
 		seen[s.ChainID] = struct{}{}
