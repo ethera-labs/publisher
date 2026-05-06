@@ -30,6 +30,14 @@ type proofPipeline struct {
 	jobs map[string]proofJob
 	quit chan struct{}
 	once sync.Once
+
+	// pubMu protects lastPublishedL2BlockByChain, the per-chain high-water mark of
+	// op-succinct's L2BlockNumber that we've already published. New submissions must
+	// strictly exceed the high-water for their chain to be eligible for the next
+	// publish — preventing the every-slot republish loop after RequireAllChains lets
+	// us aggregate across multiple superblock-hash buckets.
+	pubMu                       sync.Mutex
+	lastPublishedL2BlockByChain map[uint32]uint64
 }
 
 type proofJob struct {
@@ -59,15 +67,16 @@ func newProofPipeline(
 		poll = 10 * time.Second
 	}
 	return &proofPipeline{
-		cfg:       cfg,
-		collector: collector,
-		prover:    prover,
-		sbStore:   sbStore,
-		publishFn: publishFn,
-		log:       log.With().Str("component", "proof-pipeline").Logger(),
-		pollEvery: poll,
-		jobs:      make(map[string]proofJob),
-		quit:      make(chan struct{}),
+		cfg:                         cfg,
+		collector:                   collector,
+		prover:                      prover,
+		sbStore:                     sbStore,
+		publishFn:                   publishFn,
+		log:                         log.With().Str("component", "proof-pipeline").Logger(),
+		pollEvery:                   poll,
+		jobs:                        make(map[string]proofJob),
+		quit:                        make(chan struct{}),
+		lastPublishedL2BlockByChain: make(map[uint32]uint64),
 	}
 }
 
@@ -140,28 +149,52 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 		p.log.Info().
 			Uint64("current_superblock", sb.Number).
 			Int("total_submissions_in_collector", totalSubmissions).
-			Msg("No submissions for current superblock, but collector has submissions - trying to reuse them")
+			Msg("No submissions for current superblock, aggregating latest per chain across buckets")
 
-		// TODO: For testing, get submissions from ANY superblock and modify them to match current one
-		// This is a hack to test prover integration without proper coordination
+		// op-succinct submits one bucket per chain (keyed by its own chain-local
+		// superblock_hash), so a single bucket only ever holds one chain's submission.
+		// To satisfy RequireAllChains we aggregate across every bucket, keeping the
+		// latest submission per chain by L2BlockNumber, and skip submissions we've
+		// already published (per-chain high-water).
+		p.pubMu.Lock()
+		highWater := make(map[uint32]uint64, len(p.lastPublishedL2BlockByChain))
+		for k, v := range p.lastPublishedL2BlockByChain {
+			highWater[k] = v
+		}
+		p.pubMu.Unlock()
+
 		allSuperblocks := allSubs["submissions_by_superblock"].(map[string]int)
+		latestByChain := make(map[uint32]proofs.Submission)
 		for sbHash := range allSuperblocks {
 			otherHash := common.HexToHash(sbHash)
 			otherSubs, err := p.collector.ListSubmissions(ctx, otherHash)
-			if err == nil && len(otherSubs) > 0 {
-				p.log.Info().
-					Str("reusing_from_superblock", sbHash).
-					Int("submissions_count", len(otherSubs)).
-					Msg("Reusing submissions from different superblock")
-
-				// Modify the submissions to match current superblock
-				for i := range otherSubs {
-					otherSubs[i].SuperblockNumber = sb.Number
-					otherSubs[i].SuperblockHash = sb.Hash
-				}
-				proofSubs = otherSubs
-				break
+			if err != nil || len(otherSubs) == 0 {
+				continue
 			}
+			for _, s := range otherSubs {
+				if s.Aggregation.L2BlockNumber <= highWater[s.ChainID] {
+					continue
+				}
+				existing, ok := latestByChain[s.ChainID]
+				if !ok || s.Aggregation.L2BlockNumber > existing.Aggregation.L2BlockNumber {
+					latestByChain[s.ChainID] = s
+				}
+			}
+		}
+
+		if len(latestByChain) > 0 {
+			proofSubs = make([]proofs.Submission, 0, len(latestByChain))
+			for _, s := range latestByChain {
+				// Stamp with the current slot's superblock identity (matches the
+				// previous reuse semantics expected by downstream code).
+				s.SuperblockNumber = sb.Number
+				s.SuperblockHash = sb.Hash
+				proofSubs = append(proofSubs, s)
+			}
+			p.log.Info().
+				Int("submissions_count", len(proofSubs)).
+				Int("buckets_scanned", len(allSuperblocks)).
+				Msg("Aggregated latest submissions across buckets for current superblock")
 		}
 	}
 
@@ -718,6 +751,15 @@ func (p *proofPipeline) handleBypass(
 		})
 		return fmt.Errorf("bypass publish: %w", err)
 	}
+
+	// Advance per-chain high-water so we don't republish the same submissions next slot.
+	p.pubMu.Lock()
+	for _, s := range proofSubs {
+		if s.Aggregation.L2BlockNumber > p.lastPublishedL2BlockByChain[s.ChainID] {
+			p.lastPublishedL2BlockByChain[s.ChainID] = s.Aggregation.L2BlockNumber
+		}
+	}
+	p.pubMu.Unlock()
 
 	_ = p.collector.UpdateStatus(ctx, sb.Hash, func(st *proofs.Status) {
 		st.State = proofs.StateComplete
