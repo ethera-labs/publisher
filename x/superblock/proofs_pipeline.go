@@ -41,9 +41,10 @@ type proofPipeline struct {
 }
 
 type proofJob struct {
-	hash      common.Hash
-	number    uint64
-	proofType string
+	hash             common.Hash
+	number           uint64
+	proofType        string
+	chainIDsByRollup map[common.Hash]uint64
 }
 
 func newProofPipeline(
@@ -268,6 +269,17 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 		return nil
 	}
 
+	chainIDsByRollup, err := chainIDsByRollupFromSubs(proofSubs)
+	if err != nil {
+		_ = p.collector.UpdateStatus(ctx, sb.Hash, func(st *proofs.Status) {
+			st.SuperblockNumber = sb.Number
+			st.SuperblockHash = sb.Hash
+			st.State = proofs.StateFailed
+			st.Error = err.Error()
+		})
+		return fmt.Errorf("build chain id map: %w", err)
+	}
+
 	job := p.buildProofJobInput(ctx, sb, proofSubs)
 
 	jobID, err := p.prover.RequestProof(ctx, job)
@@ -293,7 +305,12 @@ func (p *proofPipeline) HandleSuperblock(ctx context.Context, sb *store.Superblo
 	}
 
 	p.mu.Lock()
-	p.jobs[jobID] = proofJob{hash: sb.Hash, number: sb.Number, proofType: job.ProofType}
+	p.jobs[jobID] = proofJob{
+		hash:             sb.Hash,
+		number:           sb.Number,
+		proofType:        job.ProofType,
+		chainIDsByRollup: chainIDsByRollup,
+	}
 	p.mu.Unlock()
 
 	p.log.Info().Str("job_id", jobID).Uint64("superblock", sb.Number).Msg("Proof job dispatched")
@@ -619,7 +636,15 @@ func (p *proofPipeline) handleCompleted(ctx context.Context, jobID string, job p
 		Msg("Proof job finished successfully")
 
 	outputs := status.SuperblockAggOutputs
-	p.enrichBootInfoChainIDs(ctx, job.hash, outputs)
+	if err := p.applyChainIDs(outputs, job.chainIDsByRollup); err != nil {
+		p.log.Error().Err(err).Str("job_id", jobID).Msg("Refusing to publish: chain ID enrichment failed")
+		_ = p.collector.UpdateStatus(ctx, job.hash, func(st *proofs.Status) {
+			st.State = proofs.StateFailed
+			st.Error = err.Error()
+		})
+		p.removeJob(jobID)
+		return
+	}
 	proofBytes := status.Proof
 	if len(proofBytes) == 0 {
 		p.log.Warn().Str("job_id", jobID).Msg("Completed proof job returned empty proof")
@@ -664,27 +689,44 @@ func (p *proofPipeline) handleCompleted(ctx context.Context, jobID string, job p
 	go p.processQueuedJobs(ctx)
 }
 
-// enrichBootInfoChainIDs populates ChainId on each BootInfo entry by matching
-// rollupConfigHash against the original submissions which carry the chain ID.
-func (p *proofPipeline) enrichBootInfoChainIDs(ctx context.Context, sbHash common.Hash, outputs *proofs.SuperblockAggOutputs) {
-	if outputs == nil || len(outputs.BootInfo) == 0 {
-		return
-	}
-	subs, err := p.collector.ListSubmissions(ctx, sbHash)
-	if err != nil || len(subs) == 0 {
-		p.log.Warn().Err(err).Msg("Could not retrieve submissions to enrich boot info chain IDs")
-		return
-	}
-	configToChain := make(map[common.Hash]uint64, len(subs))
+// chainIDsByRollupFromSubs builds a rollupConfigHash → l2 chainID map from the
+// submissions that fed the proof job. Returns an error if any submission carries
+// a zero chain_id, since that propagates into the SuperRootProof and produces a
+// rootClaim the L1 portal cannot reconcile.
+func chainIDsByRollupFromSubs(subs []proofs.Submission) (map[common.Hash]uint64, error) {
+	out := make(map[common.Hash]uint64, len(subs))
 	for _, s := range subs {
-		configToChain[s.Aggregation.RollupConfigHash] = uint64(s.ChainID)
+		if s.ChainID == 0 {
+			return nil, fmt.Errorf(
+				"submission for rollupConfigHash %s has chain_id=0",
+				s.Aggregation.RollupConfigHash.Hex(),
+			)
+		}
+		out[s.Aggregation.RollupConfigHash] = uint64(s.ChainID)
+	}
+	return out, nil
+}
+
+// applyChainIDs stamps ChainId onto each BootInfo entry from the per-job
+// rollupConfigHash → chainID map captured at dispatch time. Errors if any
+// BootInfo can't be resolved — refusing to publish is safer than emitting a
+// SuperRootProof with chainId=0 that the portal will reject on prove.
+func (p *proofPipeline) applyChainIDs(outputs *proofs.SuperblockAggOutputs, chainIDsByRollup map[common.Hash]uint64) error {
+	if outputs == nil {
+		return nil
 	}
 	for i, bi := range outputs.BootInfo {
 		h := common.HexToHash(bi.RollupConfigHash)
-		if chainId, ok := configToChain[h]; ok {
-			outputs.BootInfo[i].ChainId = chainId
+		chainID, ok := chainIDsByRollup[h]
+		if !ok || chainID == 0 {
+			return fmt.Errorf(
+				"no chain_id for rollupConfigHash %s (boot_info[%d])",
+				h.Hex(), i,
+			)
 		}
+		outputs.BootInfo[i].ChainId = chainID
 	}
+	return nil
 }
 
 func (p *proofPipeline) removeJob(jobID string) {
@@ -781,6 +823,7 @@ func buildMockAggOutputs(sb *store.Superblock, subs []proofs.Submission) *proofs
 			L2PostRoot:       sub.Aggregation.L2PostRoot.Hex(),
 			L2BlockNumber:    sub.Aggregation.L2BlockNumber,
 			RollupConfigHash: sub.Aggregation.RollupConfigHash.Hex(),
+			ChainId:          uint64(sub.ChainID),
 		})
 	}
 	return &proofs.SuperblockAggOutputs{

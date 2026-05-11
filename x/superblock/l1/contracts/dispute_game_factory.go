@@ -83,7 +83,10 @@ func (b *DisputeGameFactoryBinding) BuildPublishWithProofCalldata(
 	}
 
 	aggOutputs := b.toSuperblockAggregationOutputs(outputs)
-	srp := b.buildSuperRootProof(sb, outputs)
+	srp, err := b.buildSuperRootProof(sb, outputs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build super root proof: %w", err)
+	}
 
 	extraData, err := encodeExtraData(aggOutputs, srp, proof)
 	if err != nil {
@@ -138,13 +141,21 @@ func encodeExtraData(aggOutputs superblockAggregationOutputs, srp superRootProof
 }
 
 // buildSuperRootProof constructs a SuperRootProof from superblock and prover outputs.
+// Errors on any zero ChainId — the on-chain portal rejects chainId=0 with
+// OptimismPortal_InvalidOutputRootChainId, so a proposal with zeros is unprovable.
 func (b *DisputeGameFactoryBinding) buildSuperRootProof(
 	sb *store.Superblock,
 	outputs *proofs.SuperblockAggOutputs,
-) superRootProof {
+) (superRootProof, error) {
 	var outputRoots []outputRootWithChainId
 	if outputs != nil {
-		for _, bi := range outputs.BootInfo {
+		for i, bi := range outputs.BootInfo {
+			if bi.ChainId == 0 {
+				return superRootProof{}, fmt.Errorf(
+					"boot_info[%d] has chain_id=0 for rollupConfigHash %s",
+					i, bi.RollupConfigHash,
+				)
+			}
 			outputRoots = append(outputRoots, outputRootWithChainId{
 				ChainId: new(big.Int).SetUint64(bi.ChainId),
 				Root:    common.HexToHash(bi.L2PostRoot),
@@ -155,7 +166,7 @@ func (b *DisputeGameFactoryBinding) buildSuperRootProof(
 		Version:     [1]byte{0x01},
 		Timestamp:   uint64(sb.Timestamp.Unix()),
 		OutputRoots: outputRoots,
-	}
+	}, nil
 }
 
 // hashSuperRootProof mirrors Hashing.hashSuperRootProof from the OP Stack contracts.
