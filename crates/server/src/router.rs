@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use tower_http::cors::CorsLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -18,6 +18,10 @@ pub fn build_router(state: AppState, request_timeout: Duration) -> Router {
         .route("/ready", get(handlers::health::handle_ready))
         .route("/stats", get(handlers::health::handle_stats))
         .route("/metrics", get(handlers::metrics::handle_metrics))
+        .route(
+            "/v1/proofs/op-succinct",
+            post(handlers::proofs::handle_submit_proof),
+        )
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             request_timeout,

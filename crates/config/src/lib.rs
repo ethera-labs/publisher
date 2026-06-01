@@ -25,6 +25,18 @@ pub struct Config {
     pub consensus: ConsensusConfig,
     pub metrics: MetricsConfig,
     pub log: LogConfig,
+    pub settlement: SettlementConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SettlementConfig {
+    /// L1 JSON-RPC endpoint (e.g. `http://l1-rpc:8545`).
+    pub l1_rpc_url: String,
+    /// Deployed `ComposeL2OutputOracle` contract address.
+    pub l2oo_address: String,
+    /// Hex-encoded private key of the approved proposer account.
+    pub proposer_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -47,6 +59,10 @@ pub struct ApiConfig {
 pub struct ConsensusConfig {
     #[serde(with = "humantime_serde")]
     pub timeout: Duration,
+    #[serde(with = "humantime_serde")]
+    pub period_duration: Duration,
+    #[serde(with = "humantime_serde")]
+    pub proof_window: Duration,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,6 +100,8 @@ impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(60),
+            period_duration: Duration::from_secs(3840),
+            proof_window: Duration::from_secs(7200),
         }
     }
 }
@@ -135,11 +153,20 @@ impl Config {
         env_duration("API_REQUEST_TIMEOUT", &mut self.api.request_timeout);
 
         env_duration("CONSENSUS_TIMEOUT", &mut self.consensus.timeout);
+        env_duration(
+            "CONSENSUS_PERIOD_DURATION",
+            &mut self.consensus.period_duration,
+        );
+        env_duration("CONSENSUS_PROOF_WINDOW", &mut self.consensus.proof_window);
 
         env_bool("METRICS_ENABLED", &mut self.metrics.enabled);
 
         env_str("LOG_LEVEL", &mut self.log.level);
         env_bool("LOG_PRETTY", &mut self.log.pretty);
+
+        env_str("SETTLEMENT_L1_RPC_URL", &mut self.settlement.l1_rpc_url);
+        env_str("SETTLEMENT_L2OO_ADDRESS", &mut self.settlement.l2oo_address);
+        env_str("SETTLEMENT_PROPOSER_KEY", &mut self.settlement.proposer_key);
     }
 
     fn validate(&self) -> Result<()> {
@@ -150,6 +177,14 @@ impl Config {
         anyhow::ensure!(
             !self.consensus.timeout.is_zero(),
             "consensus.timeout must be positive"
+        );
+        anyhow::ensure!(
+            !self.consensus.period_duration.is_zero(),
+            "consensus.period_duration must be positive"
+        );
+        anyhow::ensure!(
+            !self.consensus.proof_window.is_zero(),
+            "consensus.proof_window must be positive"
         );
         Ok(())
     }
@@ -205,6 +240,8 @@ mod tests {
         assert_eq!(cfg.api.listen_addr, ":8081");
         assert_eq!(cfg.api.request_timeout, Duration::from_secs(15));
         assert_eq!(cfg.consensus.timeout, Duration::from_secs(60));
+        assert_eq!(cfg.consensus.period_duration, Duration::from_secs(3840));
+        assert_eq!(cfg.consensus.proof_window, Duration::from_secs(7200));
         assert!(cfg.metrics.enabled);
         assert_eq!(cfg.log.level, "info");
         assert!(!cfg.log.pretty);
@@ -217,6 +254,8 @@ server:
   listen_addr: ":9090"
 consensus:
   timeout: 3s
+  period_duration: 30s
+  proof_window: 5m
 log:
   level: debug
   pretty: true
@@ -224,6 +263,8 @@ log:
         let cfg: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.server.listen_addr, ":9090");
         assert_eq!(cfg.consensus.timeout, Duration::from_secs(3));
+        assert_eq!(cfg.consensus.period_duration, Duration::from_secs(30));
+        assert_eq!(cfg.consensus.proof_window, Duration::from_secs(300));
         assert_eq!(cfg.log.level, "debug");
         assert!(cfg.log.pretty);
         assert_eq!(cfg.api.listen_addr, ":8081");

@@ -61,18 +61,24 @@ Use `--config <path>` to specify a custom config file.
 | `api.listen_addr`         | `API_LISTEN_ADDR`         | `0.0.0.0:8081` |
 | `api.request_timeout`     | `API_REQUEST_TIMEOUT`     | `15s`          |
 | `consensus.timeout`       | `CONSENSUS_TIMEOUT`       | `60s`          |
+| `consensus.period_duration` | `CONSENSUS_PERIOD_DURATION` | `3840s`     |
+| `consensus.proof_window`  | `CONSENSUS_PROOF_WINDOW`  | `7200s`        |
 | `metrics.enabled`         | `METRICS_ENABLED`         | `true`         |
 | `log.level`               | `LOG_LEVEL`               | `info`         |
 | `log.pretty`              | `LOG_PRETTY`              | `false`        |
+| `settlement.l1_rpc_url`   | `SETTLEMENT_L1_RPC_URL`   | empty          |
+| `settlement.l2oo_address` | `SETTLEMENT_L2OO_ADDRESS` | empty          |
+| `settlement.proposer_key` | `SETTLEMENT_PROPOSER_KEY` | empty          |
 
 ## HTTP API
 
-| Endpoint       | Description                                    |
-|----------------|------------------------------------------------|
-| `GET /health`  | Liveness probe                                 |
-| `GET /ready`   | Readiness probe (503 until a sidecar connects) |
-| `GET /stats`   | Application statistics                         |
-| `GET /metrics` | Prometheus metrics (404 when disabled)         |
+| Endpoint                      | Description                                    |
+|-------------------------------|------------------------------------------------|
+| `GET /health`                 | Liveness probe                                 |
+| `GET /ready`                  | Readiness probe (503 until a sidecar connects) |
+| `GET /stats`                  | Application statistics                         |
+| `GET /metrics`                | Prometheus metrics (404 when disabled)         |
+| `POST /v1/proofs/op-succinct` | Submit a proof bundle for a chain/superblock   |
 
 ## Development
 

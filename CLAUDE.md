@@ -43,17 +43,18 @@ transactions (xTs) so that every involved chain either commits or aborts togethe
 3. Each sidecar votes via a `Vote` message. `Coordinator::handle_vote` collects votes: one `false` vote triggers
    immediate `Decided(false)`; unanimous `true` votes produce `Decided(true)`.
 4. After decision, `drain_queue` attempts to start the next queued xT whose chains are no longer locked.
-5. A background `timeout_loop` (1 s tick) calls `cleanup_expired_xts` to abort stale xTs that exceed
-   `consensus.timeout`, releasing their chains and draining the queue.
-6. The publisher also broadcasts `StartPeriod` (every 12 s) and can broadcast `Rollback`.
+5. A background `reaper_loop` (1 s tick) calls `reap_timed_out_xts` to abort stale xTs that exceed
+   `consensus.timeout`, and `reap_expired_proofs` to clear stale proof sets and trigger rollback.
+6. The publisher also broadcasts `StartPeriod` on the configured `consensus.period_duration` cadence and can
+   broadcast `Rollback`.
 
 ### Crate responsibilities
 
 | Crate                | Role                                                                                    |
 |----------------------|-----------------------------------------------------------------------------------------|
-| `bin/publisher`      | `main`: wires QUIC server, coordinator, HTTP API; period loop, timeout loop, shutdown   |
+| `bin/publisher`      | `main`: wires QUIC server, coordinator, HTTP API; period loop, reaper loop, shutdown    |
 | `crates/config`      | YAML config + env-var overrides (`SECTION_FIELD` convention, no prefix)                 |
-| `crates/coordinator` | 2PC state machine (`CoordinatorState`), message dispatch (`handlers`), xT timeout       |
+| `crates/coordinator` | 2PC state machine (`CoordinatorState`), message dispatch (`handlers`), xT/proof reaping |
 | `crates/transport`   | QUIC server (quinn), length-prefixed framing, self-signed TLS, per-connection callbacks |
 | `crates/server`      | Axum HTTP API: `/health`, `/ready`, `/stats`, `/metrics`                                |
 | `crates/metrics`     | Prometheus metrics via `prometheus-client`                                              |
@@ -94,6 +95,11 @@ Environment variables override YAML values (uppercase `SECTION_FIELD` convention
 | `api.listen_addr`         | `API_LISTEN_ADDR`         | `0.0.0.0:8081` |
 | `api.request_timeout`     | `API_REQUEST_TIMEOUT`     | `15s`          |
 | `consensus.timeout`       | `CONSENSUS_TIMEOUT`       | `60s`          |
+| `consensus.period_duration` | `CONSENSUS_PERIOD_DURATION` | `3840s`     |
+| `consensus.proof_window`  | `CONSENSUS_PROOF_WINDOW`  | `7200s`        |
 | `metrics.enabled`         | `METRICS_ENABLED`         | `true`         |
 | `log.level`               | `LOG_LEVEL`               | `info`         |
 | `log.pretty`              | `LOG_PRETTY`              | `false`        |
+| `settlement.l1_rpc_url`   | `SETTLEMENT_L1_RPC_URL`   | empty          |
+| `settlement.l2oo_address` | `SETTLEMENT_L2OO_ADDRESS` | empty          |
+| `settlement.proposer_key` | `SETTLEMENT_PROPOSER_KEY` | empty          |
