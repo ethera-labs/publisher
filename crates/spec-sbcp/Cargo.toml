@@ -1,4 +1,4 @@
-# TODO: Remove this vendored copy once native spec crate integration is complete.
+# Vendored copy retained until native spec crate integration is complete.
 [package]
 name = "compose-spec-sbcp"
 version = "0.1.0"

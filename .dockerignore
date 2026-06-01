@@ -1,0 +1,9 @@
+*
+!Cargo.lock
+!Cargo.toml
+!rust-toolchain.toml
+!rustfmt.toml
+!bin/
+!bin/**
+!crates/
+!crates/**

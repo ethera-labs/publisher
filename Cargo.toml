@@ -7,7 +7,7 @@ members = [
     "crates/metrics",
     "crates/coordinator",
     "crates/server",
-    # TODO: Remove vendored spec crates once native integration is complete.
+    # Vendored spec crates remain in-tree until native integration is complete.
     "crates/spec",
     "crates/spec-proto",
     "crates/spec-sbcp",
@@ -18,7 +18,7 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.91"
-license = "MIT"
+license = "GPL-3.0-only"
 
 [workspace.dependencies]
 # Internal crates
@@ -29,7 +29,7 @@ publisher-metrics = { path = "crates/metrics" }
 publisher-coordinator = { path = "crates/coordinator" }
 publisher-server = { path = "crates/server" }
 
-# TODO: Remove vendored spec crates once native integration is complete.
+# Vendored spec crates remain in-tree until native integration is complete.
 compose-spec = { path = "crates/spec" }
 compose-spec-proto = { path = "crates/spec-proto" }
 compose-spec-sbcp = { path = "crates/spec-sbcp" }
