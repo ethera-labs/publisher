@@ -1,78 +1,106 @@
-<!-- This is a comment in Markdown 
+# Ethera Shared Publisher
 
-🛠 Repository Setup Instructions
+Cross-chain transaction coordinator for Ethera rollups. Accepts QUIC connections from sidecars, coordinates two-phase
+commit consensus for cross-chain transactions, and exposes an HTTP API for observability.
 
-After forking or cloning this template, run the following:
-
-1. Replace all occurrences of 'template-repository' with your actual repo name:
-   sed -i 's/template-repository/your-repo-name/g' README.md
-
-2. Fill in all TODO sections below.
-
-3. Update [.github/CODEOWNERS](.github/CODEOWNERS) to reflect your team or maintainers.
-
-4. Check `.gitignore` and `.dockerignore` files and modify them according to your project's structure.
-
-5. Update GitHub Actions in `.github/workflows/` if needed (e.g., rename, add secrets).
-
--->
-<p align="center"><img src="https://framerusercontent.com/images/9FedKxMYLZKR9fxBCYj90z78.png?scale-down-to=512&width=893&height=363" alt="SSV Network"></p>
-
-<img src="https://github.com/ssvlabs/template-repository/actions/workflows/main.yml/badge.svg" alt="Check" />
-<a href="https://discord.com/invite/ssvnetworkofficial"><img src="https://img.shields.io/badge/discord-%23ssvlabs-8A2BE2.svg" alt="Discord" /></a>
-
-## ✨ Introduction
-
-<!-- Describe the purpose of this repository. -->
-This project provides a foundational structure for [describe your use case: e.g., smart contracts, node operators, CLI tools].
-
-## ⚙️  How to Build
+## Quick Start
 
 ```bash
-# Clone the repo
-git clone https://github.com/ssvlabs/template-repository.git
+# Build
+cargo build --release
 
-# Navigate
-cd your-repo-name
+# Run (development mode with pretty logs)
+just dev
 
-# Install dependencies
-TODO
-
-# Build the code
-TODO
+# Run with custom config
+./target/release/publisher --config config.yaml
 ```
 
+## Architecture
 
-## 🚀 How to Run
+```
+┌──────────────────────────────────┐
+│      Shared Publisher            │
+│  (2PC Coordinator, QUIC Server)  │
+└─────────────────┬────────────────┘
+                  │ QUIC (length-prefixed protobuf)
+          ┌───────┴───────────┐
+          │                   │
+┌─────────▼───────────┐ ┌─────▼─────────────┐
+│ Rollup A Sidecar    │ │ Rollup B Sidecar  │
+└─────────────────────┘ └───────────────────┘
+```
 
+### Crates
+
+| Crate                | Description                                               |
+|----------------------|-----------------------------------------------------------|
+| `bin/publisher`      | Binary entrypoint, period loop, shutdown                  |
+| `crates/config`      | YAML config + env-var overrides                           |
+| `crates/coordinator` | 2PC consensus state machine, message dispatch             |
+| `crates/metrics`     | Prometheus metrics                                        |
+| `crates/server`      | Axum HTTP API (`/health`, `/ready`, `/stats`, `/metrics`) |
+| `crates/tracing`     | Structured logging bootstrap                              |
+| `crates/transport`   | QUIC server, length-prefixed framing, TLS                 |
+| `crates/spec`        | Vendored domain types (ChainId, PeriodId, etc.)           |
+| `crates/spec-proto`  | Vendored protobuf message types + conversions             |
+| `crates/spec-sbcp`   | Vendored SBCP types and instance ID generation            |
+
+Protocol types and wire format come from the shared `specs/compose/` crates.
+The three `spec-*` crates are temporary vendored copies pending native integration.
+
+## Configuration
+
+Configuration is loaded from a YAML file (`config.yaml` by default) with environment variable overrides.
+Use `--config <path>` to specify a custom config file.
+
+| YAML Key                  | Env Override              | Default        |
+|---------------------------|---------------------------|----------------|
+| `server.listen_addr`      | `SERVER_LISTEN_ADDR`      | `0.0.0.0:8080` |
+| `server.max_message_size` | `SERVER_MAX_MESSAGE_SIZE` | `4194304`      |
+| `api.listen_addr`         | `API_LISTEN_ADDR`         | `0.0.0.0:8081` |
+| `api.request_timeout`     | `API_REQUEST_TIMEOUT`     | `15s`          |
+| `consensus.timeout`       | `CONSENSUS_TIMEOUT`       | `60s`          |
+| `consensus.period_duration` | `CONSENSUS_PERIOD_DURATION` | `3840s`     |
+| `consensus.proof_window`  | `CONSENSUS_PROOF_WINDOW`  | `7200s`        |
+| `metrics.enabled`         | `METRICS_ENABLED`         | `true`         |
+| `log.level`               | `LOG_LEVEL`               | `info`         |
+| `log.pretty`              | `LOG_PRETTY`              | `false`        |
+| `settlement.l1_rpc_url`   | `SETTLEMENT_L1_RPC_URL`   | empty          |
+| `settlement.l2oo_address` | `SETTLEMENT_L2OO_ADDRESS` | empty          |
+| `settlement.proposer_key` | `SETTLEMENT_PROPOSER_KEY` | empty          |
+
+## HTTP API
+
+| Endpoint                      | Description                                    |
+|-------------------------------|------------------------------------------------|
+| `GET /health`                 | Liveness probe                                 |
+| `GET /ready`                  | Readiness probe (503 until a sidecar connects) |
+| `GET /stats`                  | Application statistics                         |
+| `GET /metrics`                | Prometheus metrics (404 when disabled)         |
+| `POST /v1/proofs/op-succinct` | Submit a proof bundle for a chain/superblock   |
+
+## Development
 
 ```bash
-# Run the main service
-npm start
-# or
-go run main.go
-# or
-python app.py
+just build       # cargo build --workspace
+just test        # cargo test --workspace
+just lint        # cargo clippy --workspace --all-targets -- -D warnings
+just lint-fix    # clippy with auto-fix
+just fmt         # cargo fmt --all
+just fmt-check   # check formatting without modifying
+just ci          # fmt-check + lint + test (full CI gate)
+just dev         # run with pretty logs + debug level
+just docker      # build Docker image
 ```
 
-## 🧪 Testing
+## Docker
 
 ```bash
-npm test
-# or
-go test ./...
-# or
-pytest
+docker build -t publisher .
+docker run -p 8080:8080/udp -p 8081:8081 publisher
 ```
-
-
-## Contributing
-
-We welcome community contributions!
-
-- See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-- Create a branch, push your changes, and open a PR.
 
 ## License
 
-Repository is distributed under [GPL-3.0](LICENSE).
+Distributed under the GNU General Public License v3.0. See [`COPYING`](./COPYING) for the full text.

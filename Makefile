@@ -1,15 +1,57 @@
-CMD_MAIN=cmd/main.go
+.PHONY: build release test test-verbose lint lint-fix fmt fmt-check machete deny doc ci ci-full run dev install-hooks pre-commit install-tools docker clean
 
-default: run
-
-.PHONY: build
 build:
-	go build -o cmd/bin/publisher $(CMD_MAIN)
+	cargo build --workspace
 
-.PHONY: test
+release:
+	cargo build --release -p publisher
+
 test:
-	go test -v $(CMD_MAIN)
+	cargo test --workspace
 
-.PHONY: lint
+test-verbose:
+	cargo test --workspace -- --nocapture
+
 lint:
-	golangci-lint run $(CMD_MAIN)
+	cargo clippy --workspace --all-targets -- -D warnings
+
+lint-fix:
+	cargo clippy --workspace --all-targets --fix --allow-staged -- -D warnings
+
+fmt:
+	cargo fmt --all
+
+fmt-check:
+	cargo fmt --all -- --check
+
+machete:
+	cargo machete
+
+deny:
+	cargo deny check
+
+doc:
+	cargo doc --workspace --no-deps --open
+
+ci: fmt-check lint test
+
+ci-full: fmt-check lint test deny machete
+
+dev:
+	PUBLISHER_LOG_FORMAT=pretty PUBLISHER_LOG_LEVEL=debug cargo run -p publisher
+
+install-hooks:
+	pre-commit install
+
+pre-commit:
+	pre-commit run --all-files
+
+install-tools:
+	cargo install cargo-deny --locked
+	cargo install cargo-machete --locked
+
+docker:
+	docker build -t publisher:latest .
+
+clean:
+	cargo clean

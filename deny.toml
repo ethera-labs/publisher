@@ -1,0 +1,64 @@
+# This section is considered when running `cargo deny check advisories`
+# More documentation for the advisories section can be found here:
+# https://embarkstudios.github.io/cargo-deny/checks/advisories/cfg.html
+[advisories]
+yanked = "warn"
+# paste is unmaintained (RUSTSEC-2024-0436) but pulled in transitively by
+# alloy-primitives with no available replacement. Ignore until alloy upgrades.
+ignore = [{ id = "RUSTSEC-2024-0436" }]
+
+# This section is considered when running `cargo deny check bans`.
+# More documentation about the 'bans' section can be found here:
+# https://embarkstudios.github.io/cargo-deny/checks/bans/cfg.html
+[bans]
+# Lint level for when multiple versions of the same crate are detected
+multiple-versions = "warn"
+# Lint level for when a crate version requirement is `*`
+wildcards = "allow"
+highlight = "all"
+# List of crates to deny
+deny = [{ name = "openssl" }]
+# Certain crates/versions that will be skipped when doing duplicate detection.
+skip = []
+# Similarly to `skip` allows you to skip certain crates during duplicate
+# detection. Unlike skip, it also includes the entire tree of transitive
+# dependencies starting at the specified crate, up to a certain depth, which is
+# by default infinite
+skip-tree = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+    "GPL-3.0-only",
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "Unlicense",
+    "Unicode-3.0",
+    "Zlib",
+    "LicenseRef-rustls-webpki",
+    "CDLA-Permissive-2.0",
+]
+exceptions = []
+
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[[licenses.clarify]]
+name = "rustls-webpki"
+expression = "LicenseRef-rustls-webpki"
+license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "deny"
+unused-allowed-source = "allow"

@@ -1,0 +1,105 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+just build          # cargo build --workspace
+just test           # cargo test --workspace
+just lint           # cargo clippy --workspace --all-targets -- -D warnings
+just lint-fix       # clippy with auto-fix
+just fmt            # cargo fmt --all (formats in place)
+just fmt-check      # check formatting without modifying
+just ci             # fmt-check + lint + test (full CI gate)
+just ci-full        # ci + cargo deny + cargo machete
+just dev            # run with LOG_PRETTY=true and LOG_LEVEL=debug
+just run -- <args>  # cargo run -p publisher -- <args>
+```
+
+Run a single test:
+
+```bash
+cargo test -p <crate-name> <test_name>
+```
+
+Pre-commit hooks (fmt, clippy, deny, machete) run automatically via `pre-commit`. Install with `just install-hooks`.
+Requires `cargo-deny` and `cargo-machete` (`just install-tools`).
+
+Toolchain is pinned to Rust **1.91** via `rust-toolchain.toml`.
+
+## Architecture
+
+The publisher is the **coordinator** side of a 2-Phase Commit (2PC) protocol for synchronous composability across
+rollups. Sidecars (one per rollup sequencer) connect to the publisher over QUIC; the publisher orchestrates cross-rollup
+transactions (xTs) so that every involved chain either commits or aborts together.
+
+### Request lifecycle
+
+1. A sidecar sends an `XtRequest` (length-prefixed protobuf over QUIC).
+2. `Coordinator::handle_xt_request` checks if any target chains are already locked in an active xT. If so, the request
+   is queued (max 100 entries); otherwise it immediately calls `prepare_xt`, which assigns a `PeriodId`/
+   `SequenceNumber`, computes the `instance_id`, and broadcasts `StartInstance` to all connected sidecars.
+3. Each sidecar votes via a `Vote` message. `Coordinator::handle_vote` collects votes: one `false` vote triggers
+   immediate `Decided(false)`; unanimous `true` votes produce `Decided(true)`.
+4. After decision, `drain_queue` attempts to start the next queued xT whose chains are no longer locked.
+5. A background `reaper_loop` (1 s tick) calls `reap_timed_out_xts` to abort stale xTs that exceed
+   `consensus.timeout`, and `reap_expired_proofs` to clear stale proof sets and trigger rollback.
+6. The publisher also broadcasts `StartPeriod` on the configured `consensus.period_duration` cadence and can
+   broadcast `Rollback`.
+
+### Crate responsibilities
+
+| Crate                | Role                                                                                    |
+|----------------------|-----------------------------------------------------------------------------------------|
+| `bin/publisher`      | `main`: wires QUIC server, coordinator, HTTP API; period loop, reaper loop, shutdown    |
+| `crates/config`      | YAML config + env-var overrides (`SECTION_FIELD` convention, no prefix)                 |
+| `crates/coordinator` | 2PC state machine (`CoordinatorState`), message dispatch (`handlers`), xT/proof reaping |
+| `crates/transport`   | QUIC server (quinn), length-prefixed framing, self-signed TLS, per-connection callbacks |
+| `crates/server`      | Axum HTTP API: `/health`, `/ready`, `/stats`, `/metrics`                                |
+| `crates/metrics`     | Prometheus metrics via `prometheus-client`                                              |
+| `crates/tracing`     | `tracing-subscriber` setup (json or pretty format)                                      |
+| `crates/spec`        | Vendored domain types (`ChainId`, `PeriodId`, `XtRequest`, ...)                         |
+| `crates/spec-proto`  | Vendored protobuf types + conversion helpers                                            |
+| `crates/spec-sbcp`   | Vendored SBCP types: block structs, `generate_instance_id`, publisher/sequencer traits  |
+
+> The three `spec-*` crates are temporary vendored copies. The TODO in `Cargo.toml` indicates they will be removed once
+> native integration is complete. The specs repo also has `compose-spec-scp` (not yet vendored) which contains
+> `PublisherInstance` / `SequencerInstance` with full 2PC logic including mailbox simulation.
+
+### Key internal invariants
+
+- **`CoordinatorState` is behind a single `Arc<RwLock<...>>`** -- all mutations acquire a write lock; reads acquire a
+  read lock. Avoid holding the lock across `.await` points (the existing pattern drops it before broadcasting).
+- **Instance ID** is a deterministic hash of `(PeriodId, SequenceNumber, XtRequest)` computed by `generate_instance_id`
+  from `crates/spec-sbcp`. Stored and looked up as `hex::encode(instance_id.as_bytes())`.
+- **Chain reservation** (`active_chains` map) prevents two concurrent xTs from touching the same chain. Chains are
+  reserved in `prepare_xt` and released in `record_vote` once a decision is reached (or on timeout).
+- **`/ready` returns 503** until at least one sidecar is connected (checked via `QuicServer::connection_count`).
+
+### Wire protocol
+
+Messages are length-prefixed protobuf (`compose_spec_proto::Message`). Framing is in `crates/transport/src/framing.rs`.
+TLS uses a self-signed ephemeral cert generated by `rcgen` at startup (no mTLS/auth beyond QUIC's transport-layer
+encryption).
+
+## Configuration
+
+Configuration is loaded from a YAML file (`config.yaml` by default, override with `--config <path>`).
+Environment variables override YAML values (uppercase `SECTION_FIELD` convention, no prefix):
+
+| YAML Key                  | Env Override              | Default        |
+|---------------------------|---------------------------|----------------|
+| `server.listen_addr`      | `SERVER_LISTEN_ADDR`      | `0.0.0.0:8080` |
+| `server.max_message_size` | `SERVER_MAX_MESSAGE_SIZE` | `4194304`      |
+| `api.listen_addr`         | `API_LISTEN_ADDR`         | `0.0.0.0:8081` |
+| `api.request_timeout`     | `API_REQUEST_TIMEOUT`     | `15s`          |
+| `consensus.timeout`       | `CONSENSUS_TIMEOUT`       | `60s`          |
+| `consensus.period_duration` | `CONSENSUS_PERIOD_DURATION` | `3840s`     |
+| `consensus.proof_window`  | `CONSENSUS_PROOF_WINDOW`  | `7200s`        |
+| `metrics.enabled`         | `METRICS_ENABLED`         | `true`         |
+| `log.level`               | `LOG_LEVEL`               | `info`         |
+| `log.pretty`              | `LOG_PRETTY`              | `false`        |
+| `settlement.l1_rpc_url`   | `SETTLEMENT_L1_RPC_URL`   | empty          |
+| `settlement.l2oo_address` | `SETTLEMENT_L2OO_ADDRESS` | empty          |
+| `settlement.proposer_key` | `SETTLEMENT_PROPOSER_KEY` | empty          |
