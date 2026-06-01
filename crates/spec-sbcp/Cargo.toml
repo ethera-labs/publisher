@@ -1,0 +1,17 @@
+# Vendored copy retained until native spec crate integration is complete.
+[package]
+name = "compose-spec-sbcp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+compose-spec.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

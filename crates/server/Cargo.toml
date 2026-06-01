@@ -1,0 +1,22 @@
+[package]
+name = "publisher-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+publisher-coordinator.workspace = true
+compose-spec.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+prometheus-client.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+alloy-primitives.workspace = true
+
+[lints]
+workspace = true
