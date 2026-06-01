@@ -50,7 +50,7 @@ pub async fn dispatch(coordinator: Arc<Coordinator>, client_id: String, data: Ve
             coordinator.handle_mailbox_relay(&mb).await;
         }
         Payload::Proof(proof) => {
-            handle_proof(coordinator, proof).await;
+            handle_proof(coordinator, &client_id, proof).await;
         }
         other => {
             warn!(client_id, payload_type = ?std::mem::discriminant(&other), "Unhandled payload");
@@ -91,7 +91,18 @@ async fn handle_handshake(
 /// Handles a `Proof` protobuf message received over QUIC. The `proof_data` field
 /// contains a minimal payload; full proof submissions with aggregation outputs
 /// should use the HTTP `/v1/proofs/op-succinct` endpoint instead.
-async fn handle_proof(coordinator: Arc<Coordinator>, proof: compose_spec_proto::Proof) {
+async fn handle_proof(
+    coordinator: Arc<Coordinator>,
+    client_id: &str,
+    proof: compose_spec_proto::Proof,
+) {
+    // The Proof wire message carries no chain_id; the sender chain is identified
+    // by its registered connection, mirroring the SBCP publisher spec.
+    let Some(chain_id) = coordinator.chain_for_client(client_id).await else {
+        warn!(client_id, "Proof from unregistered client, ignoring");
+        return;
+    };
+
     let data = ProofData {
         aggregation_outputs: AggregationOutputs::default(),
         compressed_proof: proof.proof_data,
@@ -99,7 +110,7 @@ async fn handle_proof(coordinator: Arc<Coordinator>, proof: compose_spec_proto::
         mailbox_info: MailboxInfo::default(),
     };
     coordinator
-        .receive_proof(proof.superblock_number, proof.period_id, data)
+        .receive_proof(proof.superblock_number, chain_id.get(), data)
         .await;
 }
 

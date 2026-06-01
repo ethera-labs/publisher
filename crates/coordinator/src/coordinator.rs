@@ -608,6 +608,11 @@ impl Coordinator {
         state.is_chain_registered(chain_id)
     }
 
+    pub async fn chain_for_client(&self, client_id: &str) -> Option<ChainId> {
+        let state = self.state.read().await;
+        state.client_to_chain.get(client_id).copied()
+    }
+
     pub async fn current_superblock_number(&self) -> u64 {
         let state = self.state.read().await;
         state.next_superblock_number.get()

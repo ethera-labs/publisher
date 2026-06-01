@@ -108,8 +108,13 @@ impl L1Submitter {
         superblock_number: u64,
         proofs: &HashMap<u64, ProofData>,
     ) -> Result<()> {
-        let mut boot_infos: Vec<BootInfoStruct> = proofs
-            .values()
+        // Sort by rollup_config_hash so bootInfo and the concatenated proof bytes
+        // share one deterministic order (HashMap iteration order is not stable).
+        let mut ordered: Vec<&ProofData> = proofs.values().collect();
+        ordered.sort_by_key(|p| p.aggregation_outputs.rollup_config_hash);
+
+        let boot_infos: Vec<BootInfoStruct> = ordered
+            .iter()
             .map(|p| {
                 let o = &p.aggregation_outputs;
                 BootInfoStruct {
@@ -121,7 +126,6 @@ impl L1Submitter {
                 }
             })
             .collect();
-        boot_infos.sort_by_key(|b| b.rollupConfigHash);
 
         let parent_hash = *self.parent_hash.lock().unwrap();
         let agg_outputs = SuperblockAggregationOutputs {
@@ -130,8 +134,8 @@ impl L1Submitter {
             bootInfo: boot_infos,
         };
 
-        let proof_bytes: Vec<u8> = proofs
-            .values()
+        let proof_bytes: Vec<u8> = ordered
+            .iter()
             .flat_map(|p| p.compressed_proof.iter().copied())
             .collect();
 
