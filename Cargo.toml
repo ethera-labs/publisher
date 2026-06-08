@@ -7,10 +7,6 @@ members = [
     "crates/metrics",
     "crates/coordinator",
     "crates/server",
-    # Vendored spec crates remain in-tree until native integration is complete.
-    "crates/spec",
-    "crates/spec-proto",
-    "crates/spec-sbcp",
 ]
 resolver = "2"
 
@@ -29,10 +25,9 @@ publisher-metrics = { path = "crates/metrics" }
 publisher-coordinator = { path = "crates/coordinator" }
 publisher-server = { path = "crates/server" }
 
-# Vendored spec crates remain in-tree until native integration is complete.
-compose-spec = { path = "crates/spec" }
-compose-spec-proto = { path = "crates/spec-proto" }
-compose-spec-sbcp = { path = "crates/spec-sbcp" }
+ethera-spec = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec" }
+ethera-spec-proto = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec-proto" }
+ethera-spec-sbcp = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec-sbcp" }
 
 # Async
 tokio = { version = "1.43", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

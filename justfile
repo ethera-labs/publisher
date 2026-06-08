@@ -41,7 +41,7 @@ run *ARGS:
     cargo run -p publisher -- {{ARGS}}
 
 dev:
-    PUBLISHER_LOG_FORMAT=pretty PUBLISHER_LOG_LEVEL=debug cargo run -p publisher
+    LOG_PRETTY=true LOG_LEVEL=debug cargo run -p publisher
 
 install-hooks:
     pre-commit install

@@ -4,11 +4,11 @@ use alloy_primitives::{Address, B256};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
-use compose_spec::ChainId;
+use ethera_spec::ChainId;
 use serde::Deserialize;
 use tracing::warn;
 
-use publisher_coordinator::proof_types::{AggregationOutputs, ProofData};
+use publisher_coordinator::proof_types::{AggregationOutputs, MailboxInfo, ProofData};
 
 use crate::state::AppState;
 
@@ -39,6 +39,8 @@ pub struct ProofSubmission {
     aggregation_outputs: IncomingAggregationOutputs,
     agg_vkey_hash: B256,
     #[serde(default)]
+    mailbox_info: MailboxInfo,
+    #[serde(default)]
     proof: Option<Vec<u8>>,
 }
 
@@ -62,9 +64,6 @@ pub async fn handle_submit_proof(
         return StatusCode::BAD_REQUEST;
     }
 
-    // TODO: Re-enable superblock_number range validation once op-succinct sends the
-    // publisher's global superblock number instead of chain-local end_block.
-
     let data = ProofData {
         aggregation_outputs: AggregationOutputs {
             l1_head: o.l1_head,
@@ -78,7 +77,7 @@ pub async fn handle_submit_proof(
         },
         compressed_proof: body.proof.unwrap_or_default(),
         agg_vkey_hash: body.agg_vkey_hash,
-        mailbox_info: Default::default(),
+        mailbox_info: body.mailbox_info,
     };
 
     state

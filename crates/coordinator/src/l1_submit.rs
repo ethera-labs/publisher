@@ -1,4 +1,4 @@
-//! L1 settlement — builds and submits superblock proofs to `ComposeL2OutputOracle`.
+//! L1 settlement - builds and submits superblock proofs to `ComposeL2OutputOracle`.
 
 use std::collections::HashMap;
 use std::sync::Mutex;

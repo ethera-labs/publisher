@@ -1302,28 +1302,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "compose-spec"
-version = "0.1.0"
-
-[[package]]
-name = "compose-spec-proto"
-version = "0.1.0"
-dependencies = [
- "compose-spec",
- "prost",
-]
-
-[[package]]
-name = "compose-spec-sbcp"
-version = "0.1.0"
-dependencies = [
- "compose-spec",
- "sha2",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
 name = "const-hex"
 version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1687,6 +1665,31 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ethera-spec"
+version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#7823c6caf0cc6b122ca968fbfe1461f4f334f2e7"
+
+[[package]]
+name = "ethera-spec-proto"
+version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#7823c6caf0cc6b122ca968fbfe1461f4f334f2e7"
+dependencies = [
+ "ethera-spec",
+ "prost",
+]
+
+[[package]]
+name = "ethera-spec-sbcp"
+version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#7823c6caf0cc6b122ca968fbfe1461f4f334f2e7"
+dependencies = [
+ "ethera-spec",
+ "sha2",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -2970,9 +2973,9 @@ dependencies = [
  "alloy",
  "alloy-primitives",
  "anyhow",
- "compose-spec",
- "compose-spec-proto",
- "compose-spec-sbcp",
+ "ethera-spec",
+ "ethera-spec-proto",
+ "ethera-spec-sbcp",
  "hex",
  "prost",
  "publisher-metrics",
@@ -2997,7 +3000,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "axum",
- "compose-spec",
+ "ethera-spec",
  "prometheus-client",
  "publisher-coordinator",
  "serde",

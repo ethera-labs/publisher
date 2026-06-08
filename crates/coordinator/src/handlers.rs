@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use compose_spec::ChainId;
-use compose_spec_proto::{Message, Payload};
+use ethera_spec::ChainId;
+use ethera_spec_proto::{Message, Payload};
 use prost::Message as _;
 use tracing::{error, info, warn};
 
@@ -61,7 +61,7 @@ pub async fn dispatch(coordinator: Arc<Coordinator>, client_id: String, data: Ve
 async fn handle_handshake(
     coordinator: Arc<Coordinator>,
     client_id: &str,
-    req: &compose_spec_proto::HandshakeRequest,
+    req: &ethera_spec_proto::HandshakeRequest,
 ) {
     info!(client_id, requested_id = %req.client_id, "Handshake received");
 
@@ -72,10 +72,10 @@ async fn handle_handshake(
         }
     }
 
-    let resp = compose_spec_proto::Message {
+    let resp = ethera_spec_proto::Message {
         sender_id: "publisher".into(),
         payload: Some(Payload::HandshakeResponse(
-            compose_spec_proto::HandshakeResponse {
+            ethera_spec_proto::HandshakeResponse {
                 accepted: true,
                 error: String::new(),
                 session_id: client_id.to_string(),
@@ -94,7 +94,7 @@ async fn handle_handshake(
 async fn handle_proof(
     coordinator: Arc<Coordinator>,
     client_id: &str,
-    proof: compose_spec_proto::Proof,
+    proof: ethera_spec_proto::Proof,
 ) {
     // The Proof wire message carries no chain_id; the sender chain is identified
     // by its registered connection, mirroring the SBCP publisher spec.

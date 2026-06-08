@@ -57,12 +57,12 @@ async fn main() -> Result<()> {
                 Some(sub)
             }
             Err(e) => {
-                error!(error = %e, "Failed to create L1 submitter — running without L1 settlement");
+                error!(error = %e, "Failed to create L1 submitter - running without L1 settlement");
                 None
             }
         }
     } else {
-        info!("No settlement config — running without L1 settlement");
+        info!("No settlement config - running without L1 settlement");
         None
     };
 
