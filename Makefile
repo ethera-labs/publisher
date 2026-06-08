@@ -38,7 +38,7 @@ ci: fmt-check lint test
 ci-full: fmt-check lint test deny machete
 
 dev:
-	PUBLISHER_LOG_FORMAT=pretty PUBLISHER_LOG_LEVEL=debug cargo run -p publisher
+	LOG_PRETTY=true LOG_LEVEL=debug cargo run -p publisher
 
 install-hooks:
 	pre-commit install

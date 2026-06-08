@@ -5,7 +5,12 @@
 yanked = "warn"
 # paste is unmaintained (RUSTSEC-2024-0436) but pulled in transitively by
 # alloy-primitives with no available replacement. Ignore until alloy upgrades.
-ignore = [{ id = "RUSTSEC-2024-0436" }]
+# proc-macro-error2 is unmaintained (RUSTSEC-2026-0173) but pulled in
+# transitively by alloy-sol-macro with no available replacement.
+ignore = [
+    { id = "RUSTSEC-2024-0436" },
+    { id = "RUSTSEC-2026-0173" },
+]
 
 # This section is considered when running `cargo deny check bans`.
 # More documentation about the 'bans' section can be found here:
@@ -62,3 +67,4 @@ license-files = [{ path = "LICENSE", hash = 0x001c7e6c }]
 unknown-registry = "warn"
 unknown-git = "deny"
 unused-allowed-source = "allow"
+allow-git = ["https://github.com/ethera-labs/specs.git"]

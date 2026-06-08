@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use crate::l1_submit::L1Submitter;
 use crate::proof_types::ProofData;
 
-use compose_spec::{ChainId, PeriodId, SequenceNumber, SuperblockNumber, XtRequest};
-use compose_spec_sbcp::generate_instance_id;
+use ethera_spec::{ChainId, PeriodId, SequenceNumber, SuperblockNumber, XtRequest};
+use ethera_spec_sbcp::generate_instance_id;
 use prost::Message;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
@@ -29,7 +29,7 @@ pub(crate) struct ActiveXt {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PendingEntry {
-    pub xt_request: compose_spec_proto::XtRequest,
+    pub xt_request: ethera_spec_proto::XtRequest,
     pub chains: Vec<ChainId>,
 }
 
@@ -52,9 +52,8 @@ pub(crate) struct CoordinatorState {
     pub next_superblock_number: SuperblockNumber,
     pub last_finalized_superblock_number: u64,
     pub last_finalized_superblock_hash: Vec<u8>,
-    /// TODO: Replace with per-superblock-number keyed collection once op-succinct
-    /// sends the publisher's global superblock number instead of chain-local `end_block`.
-    /// Currently collects the latest proof from each chain regardless of `superblock_number`.
+    /// Latest proof per chain. op-succinct reports chain-local `end_block`,
+    /// while the publisher owns the global superblock number used for settlement.
     pending_proofs: HashMap<u64, ChainProof>,
     proof_collection_started: Option<Instant>,
 }
@@ -115,7 +114,7 @@ impl CoordinatorState {
 
     fn prepare_xt(
         &mut self,
-        xt_req: &compose_spec_proto::XtRequest,
+        xt_req: &ethera_spec_proto::XtRequest,
         chains: &[ChainId],
     ) -> (String, Vec<u8>) {
         let compose_req = proto_to_spec_xt(xt_req);
@@ -136,10 +135,10 @@ impl CoordinatorState {
             },
         );
 
-        let msg = compose_spec_proto::Message {
+        let msg = ethera_spec_proto::Message {
             sender_id: "publisher".into(),
-            payload: Some(compose_spec_proto::Payload::StartInstance(
-                compose_spec_proto::StartInstance {
+            payload: Some(ethera_spec_proto::Payload::StartInstance(
+                ethera_spec_proto::StartInstance {
                     instance_id: instance_id.as_bytes().to_vec(),
                     period_id: period_id.get(),
                     sequence_number: seq_num.get(),
@@ -197,10 +196,10 @@ impl CoordinatorState {
         self.release_chains(xt_id);
         self.active_xts.remove(xt_id);
 
-        let msg = compose_spec_proto::Message {
+        let msg = ethera_spec_proto::Message {
             sender_id: "publisher".into(),
-            payload: Some(compose_spec_proto::Payload::Decided(
-                compose_spec_proto::Decided {
+            payload: Some(ethera_spec_proto::Payload::Decided(
+                ethera_spec_proto::Decided {
                     instance_id: instance_id_bytes.to_vec(),
                     decision,
                 },
@@ -231,10 +230,10 @@ impl CoordinatorState {
             self.release_chains(&xt_id);
             self.active_xts.remove(&xt_id);
 
-            let msg = compose_spec_proto::Message {
+            let msg = ethera_spec_proto::Message {
                 sender_id: "publisher".into(),
-                payload: Some(compose_spec_proto::Payload::Decided(
-                    compose_spec_proto::Decided {
+                payload: Some(ethera_spec_proto::Payload::Decided(
+                    ethera_spec_proto::Decided {
                         instance_id: instance_id_bytes,
                         decision: false,
                     },
@@ -337,7 +336,7 @@ impl Coordinator {
         info!(client_id, chain_id = %chain_id, "Chain registered");
     }
 
-    /// Initializes superblock state from L1 on startup — must be called before
+    /// Initializes superblock state from L1 on startup - must be called before
     /// the period loop starts so `next_superblock_number` and `parent_hash` are
     /// correct after a restart.
     pub async fn init_from_l1(&self) {
@@ -355,10 +354,10 @@ impl Coordinator {
                     );
                 }
                 Ok(None) => {
-                    info!("No superblocks on L1 yet — starting from genesis");
+                    info!("No superblocks on L1 yet - starting from genesis");
                 }
                 Err(e) => {
-                    warn!(error = %e, "Failed to read L1 superblock state — starting from genesis");
+                    warn!(error = %e, "Failed to read L1 superblock state - starting from genesis");
                 }
             }
         }
@@ -374,10 +373,10 @@ impl Coordinator {
             (pid, sb)
         };
 
-        let msg = compose_spec_proto::Message {
+        let msg = ethera_spec_proto::Message {
             sender_id: "publisher".into(),
-            payload: Some(compose_spec_proto::Payload::StartPeriod(
-                compose_spec_proto::StartPeriod {
+            payload: Some(ethera_spec_proto::Payload::StartPeriod(
+                ethera_spec_proto::StartPeriod {
                     period_id: period_id.get(),
                     superblock_number: superblock_num.get(),
                 },
@@ -396,7 +395,7 @@ impl Coordinator {
     pub(crate) async fn handle_xt_request(
         &self,
         client_id: String,
-        xt_req: compose_spec_proto::XtRequest,
+        xt_req: ethera_spec_proto::XtRequest,
     ) {
         let chains = extract_chains(&xt_req);
 
@@ -481,7 +480,7 @@ impl Coordinator {
         }
     }
 
-    pub(crate) async fn handle_mailbox_relay(&self, mailbox: &compose_spec_proto::MailboxMessage) {
+    pub(crate) async fn handle_mailbox_relay(&self, mailbox: &ethera_spec_proto::MailboxMessage) {
         let dest_chain = ChainId::new(mailbox.destination_chain);
 
         let client_id = {
@@ -494,9 +493,9 @@ impl Coordinator {
             return;
         };
 
-        let msg = compose_spec_proto::Message {
+        let msg = ethera_spec_proto::Message {
             sender_id: "publisher".into(),
-            payload: Some(compose_spec_proto::Payload::MailboxMessage(mailbox.clone())),
+            payload: Some(ethera_spec_proto::Payload::MailboxMessage(mailbox.clone())),
         };
         let data = msg.encode_to_vec();
         self.inc_broadcasts();
@@ -507,11 +506,11 @@ impl Coordinator {
     }
 
     pub(crate) async fn handle_ping(&self, client_id: &str, timestamp: i64) {
-        let msg = compose_spec_proto::Message {
+        let msg = ethera_spec_proto::Message {
             sender_id: "publisher".into(),
-            payload: Some(compose_spec_proto::Payload::Pong(
-                compose_spec_proto::Pong { timestamp },
-            )),
+            payload: Some(ethera_spec_proto::Payload::Pong(ethera_spec_proto::Pong {
+                timestamp,
+            })),
         };
         let data = msg.encode_to_vec();
         if let Err(e) = self.server.send_raw(client_id, &data).await {
@@ -548,7 +547,7 @@ impl Coordinator {
         };
 
         for (xt_id, data) in &timed_out {
-            warn!(xt_id, "SCP timeout — deciding false");
+            warn!(xt_id, "SCP timeout - deciding false");
             if let Some(m) = &self.metrics {
                 m.xt_decided_abort_total.inc();
             }
@@ -570,7 +569,7 @@ impl Coordinator {
         };
 
         if expired {
-            warn!("Proof window expired — triggering rollback");
+            warn!("Proof window expired - triggering rollback");
 
             let (period_id, last_sb_num, last_sb_hash) = {
                 let mut state = self.state.write().await;
@@ -583,10 +582,10 @@ impl Coordinator {
                 )
             };
 
-            let msg = compose_spec_proto::Message {
+            let msg = ethera_spec_proto::Message {
                 sender_id: "publisher".into(),
-                payload: Some(compose_spec_proto::Payload::Rollback(
-                    compose_spec_proto::Rollback {
+                payload: Some(ethera_spec_proto::Payload::Rollback(
+                    ethera_spec_proto::Rollback {
                         period_id,
                         last_finalized_superblock_number: last_sb_num,
                         last_finalized_superblock_hash: last_sb_hash,
@@ -618,9 +617,9 @@ impl Coordinator {
         state.next_superblock_number.get()
     }
 
-    /// TODO: This ignores `superblock_number` matching — it collects the latest proof from
-    /// each chain and submits once all chains report. Fix once op-succinct sends the
-    /// publisher's global superblock number instead of chain-local `end_block`.
+    /// Collects the latest proof from each chain and submits once all chains report.
+    /// The incoming `superblock_number` is chain-local provenance; settlement uses
+    /// the publisher's current global superblock number.
     pub async fn receive_proof(&self, superblock_number: u64, chain_id: u64, data: ProofData) {
         let (collected, total, ready_proofs, submit_sb_number) = {
             let mut state = self.state.write().await;
@@ -753,7 +752,7 @@ fn validate_mailbox_consistency(proofs: &HashMap<u64, ProofData>) -> Result<(), 
     Ok(())
 }
 
-fn extract_chains(req: &compose_spec_proto::XtRequest) -> Vec<ChainId> {
+fn extract_chains(req: &ethera_spec_proto::XtRequest) -> Vec<ChainId> {
     let mut seen = std::collections::HashSet::new();
     let mut chains = Vec::new();
     for tr in &req.transaction_requests {
@@ -765,12 +764,12 @@ fn extract_chains(req: &compose_spec_proto::XtRequest) -> Vec<ChainId> {
     chains
 }
 
-fn proto_to_spec_xt(req: &compose_spec_proto::XtRequest) -> XtRequest {
+fn proto_to_spec_xt(req: &ethera_spec_proto::XtRequest) -> XtRequest {
     XtRequest {
         transactions: req
             .transaction_requests
             .iter()
-            .map(|tr| compose_spec::TransactionRequest {
+            .map(|tr| ethera_spec::TransactionRequest {
                 chain_id: ChainId::new(tr.chain_id),
                 transactions: tr.transaction.clone(),
             })
