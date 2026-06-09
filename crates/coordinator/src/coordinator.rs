@@ -1,6 +1,6 @@
 //! Core coordinator state and public API.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,9 +8,7 @@ use std::time::{Duration, Instant};
 use crate::l1_submit::L1Submitter;
 use crate::proof_types::ProofData;
 
-use ethera_spec::{
-    chains_from_request, ChainId, Instance, PeriodId, SequenceNumber, SuperblockNumber, XtRequest,
-};
+use ethera_spec::{ChainId, Instance, PeriodId, SequenceNumber, SuperblockNumber, XtRequest};
 use ethera_spec_sbcp::generate_instance_id;
 use prost::Message;
 use tokio::sync::RwLock;
@@ -737,6 +735,15 @@ fn validate_mailbox_consistency(proofs: &HashMap<u64, ProofData>) -> Result<(), 
     Ok(())
 }
 
+/// Returns the unique participating chains in first-seen order.
+///
+/// Reads chain ids straight from the wire request; converting to the domain
+/// `XtRequest` first would clone every transaction payload.
 fn extract_chains(req: &ethera_spec_proto::XtRequest) -> Vec<ChainId> {
-    chains_from_request(&XtRequest::from(req))
+    let mut seen = HashSet::new();
+    req.transaction_requests
+        .iter()
+        .map(|tr| ChainId::new(tr.chain_id))
+        .filter(|&c| seen.insert(c))
+        .collect()
 }
