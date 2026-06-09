@@ -96,3 +96,4 @@ Environment variables override YAML values (uppercase `SECTION_FIELD` convention
 | `settlement.l1_rpc_url`     | `SETTLEMENT_L1_RPC_URL`     | empty          |
 | `settlement.l2oo_address`   | `SETTLEMENT_L2OO_ADDRESS`   | empty          |
 | `settlement.proposer_key`   | `SETTLEMENT_PROPOSER_KEY`   | empty          |
+| `settlement.mock`           | `SETTLEMENT_MOCK`           | `false`        |
