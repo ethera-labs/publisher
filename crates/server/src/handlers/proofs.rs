@@ -13,6 +13,7 @@ use publisher_coordinator::proof_types::{AggregationOutputs, ProofData};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct IncomingAggregationOutputs {
     #[serde(rename = "l1Head")]
     l1_head: B256,
@@ -33,6 +34,7 @@ struct IncomingAggregationOutputs {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProofSubmission {
     superblock_number: u64,
     chain_id: u64,
