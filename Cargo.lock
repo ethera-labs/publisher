@@ -2977,7 +2977,6 @@ dependencies = [
  "ethera-spec",
  "ethera-spec-proto",
  "ethera-spec-sbcp",
- "hex",
  "prost",
  "publisher-metrics",
  "publisher-transport",

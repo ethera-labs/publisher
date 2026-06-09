@@ -8,7 +8,7 @@ use prost::Message as _;
 use tracing::{error, info, warn};
 
 use crate::coordinator::Coordinator;
-use crate::proof_types::{AggregationOutputs, MailboxInfo, ProofData};
+use crate::proof_types::{AggregationOutputs, ProofData};
 
 pub async fn dispatch(coordinator: Arc<Coordinator>, client_id: String, data: Vec<u8>) {
     coordinator.inc_messages();
@@ -107,7 +107,6 @@ async fn handle_proof(
         aggregation_outputs: AggregationOutputs::default(),
         compressed_proof: proof.proof_data,
         agg_vkey_hash: Default::default(),
-        mailbox_info: MailboxInfo::default(),
     };
     coordinator
         .receive_proof(proof.superblock_number, chain_id.get(), data)

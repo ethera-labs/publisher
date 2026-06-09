@@ -8,7 +8,7 @@ use ethera_spec::ChainId;
 use serde::Deserialize;
 use tracing::warn;
 
-use publisher_coordinator::proof_types::{AggregationOutputs, MailboxInfo, ProofData};
+use publisher_coordinator::proof_types::{AggregationOutputs, ProofData};
 
 use crate::state::AppState;
 
@@ -38,8 +38,6 @@ pub struct ProofSubmission {
     chain_id: u64,
     aggregation_outputs: IncomingAggregationOutputs,
     agg_vkey_hash: B256,
-    #[serde(default)]
-    mailbox_info: MailboxInfo,
     #[serde(default)]
     proof: Option<Vec<u8>>,
 }
@@ -77,7 +75,6 @@ pub async fn handle_submit_proof(
         },
         compressed_proof: body.proof.unwrap_or_default(),
         agg_vkey_hash: body.agg_vkey_hash,
-        mailbox_info: body.mailbox_info,
     };
 
     state

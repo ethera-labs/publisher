@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use crate::l1_submit::L1Submitter;
 use crate::proof_types::ProofData;
 
-use ethera_spec::{ChainId, Instance, PeriodId, SequenceNumber, SuperblockNumber, XtRequest};
+use ethera_spec::{
+    ChainId, Instance, InstanceId, PeriodId, SequenceNumber, SuperblockNumber, XtRequest,
+};
 use ethera_spec_sbcp::generate_instance_id;
 use prost::Message;
 use tokio::sync::RwLock;
@@ -23,7 +25,6 @@ const MAX_PENDING_QUEUE_SIZE: usize = 100;
 pub(crate) struct ActiveXt {
     chains: Vec<ChainId>,
     votes: HashMap<ChainId, bool>,
-    instance_id_bytes: Vec<u8>,
     start_time: Instant,
 }
 
@@ -37,8 +38,8 @@ pub(crate) struct PendingEntry {
 pub(crate) struct CoordinatorState {
     pub chain_to_client: HashMap<ChainId, String>,
     pub client_to_chain: HashMap<String, ChainId>,
-    pub active_xts: HashMap<String, ActiveXt>,
-    pub active_chains: HashMap<ChainId, String>,
+    pub active_xts: HashMap<InstanceId, ActiveXt>,
+    pub active_chains: HashMap<ChainId, InstanceId>,
     pub pending_queue: Vec<PendingEntry>,
     pub current_period_id: PeriodId,
     pub next_sequence_num: SequenceNumber,
@@ -81,35 +82,27 @@ impl CoordinatorState {
         chains.iter().any(|c| self.active_chains.contains_key(c))
     }
 
-    fn reserve_chains(&mut self, xt_id: &str, chains: &[ChainId]) {
+    fn reserve_chains(&mut self, id: InstanceId, chains: &[ChainId]) {
         for &chain_id in chains {
-            self.active_chains.insert(chain_id, xt_id.to_string());
+            self.active_chains.insert(chain_id, id);
         }
     }
 
-    fn release_chains(&mut self, xt_id: &str) {
-        if let Some(xt) = self.active_xts.get(xt_id) {
+    fn release_chains(&mut self, id: InstanceId) {
+        if let Some(xt) = self.active_xts.get(&id) {
             for chain_id in &xt.chains {
-                if self.active_chains.get(chain_id).map(String::as_str) == Some(xt_id) {
+                if self.active_chains.get(chain_id) == Some(&id) {
                     self.active_chains.remove(chain_id);
                 }
             }
         }
     }
 
-    fn check_decision(&self, xt_id: &str) -> Option<bool> {
-        let xt = self.active_xts.get(xt_id)?;
-        if xt.votes.len() < xt.chains.len() {
-            return None;
-        }
-        Some(xt.votes.values().all(|&v| v))
-    }
-
     fn prepare_xt(
         &mut self,
         xt_req: &ethera_spec_proto::XtRequest,
         chains: &[ChainId],
-    ) -> (String, Vec<u8>) {
+    ) -> (InstanceId, Vec<u8>) {
         let seq_num = self.next_sequence_num;
         let period_id = self.current_period_id;
         let compose_req = XtRequest::from(xt_req);
@@ -119,16 +112,15 @@ impl CoordinatorState {
             sequence_number: seq_num,
             xt_request: compose_req,
         };
-        let xt_id = instance.id.to_string();
+        let id = instance.id;
         self.next_sequence_num = seq_num + 1;
 
-        self.reserve_chains(&xt_id, chains);
+        self.reserve_chains(id, chains);
         self.active_xts.insert(
-            xt_id.clone(),
+            id,
             ActiveXt {
                 chains: chains.to_vec(),
                 votes: HashMap::new(),
-                instance_id_bytes: instance.id.as_bytes().to_vec(),
                 start_time: Instant::now(),
             },
         );
@@ -141,59 +133,54 @@ impl CoordinatorState {
         };
 
         info!(
-            xt_id,
+            xt_id = %id,
             period_id = %period_id,
             seq_num = %seq_num,
             chains = chains.len(),
             "XT prepared"
         );
 
-        (xt_id, msg.encode_to_vec())
+        (id, msg.encode_to_vec())
     }
 
     fn record_vote(
         &mut self,
-        xt_id: &str,
-        instance_id_bytes: &[u8],
+        id: InstanceId,
         chain_id: ChainId,
         vote: bool,
     ) -> Option<(bool, f64, Vec<u8>)> {
-        let xt = self.active_xts.get_mut(xt_id)?;
+        let xt = self.active_xts.get_mut(&id)?;
 
         if !xt.chains.contains(&chain_id) {
-            warn!(xt_id, chain_id = %chain_id, "Ignoring vote from non-participant chain");
+            warn!(xt_id = %id, chain_id = %chain_id, "Ignoring vote from non-participant chain");
             return None;
         }
 
         if xt.votes.contains_key(&chain_id) {
-            warn!(xt_id, chain_id = %chain_id, "Ignoring duplicate vote");
+            warn!(xt_id = %id, chain_id = %chain_id, "Ignoring duplicate vote");
             return None;
         }
 
         xt.votes.insert(chain_id, vote);
 
+        // A single reject decides false immediately; otherwise wait for unanimity.
         let decision = if !vote {
-            Some(false)
+            false
+        } else if xt.votes.len() == xt.chains.len() {
+            xt.votes.values().all(|&v| v)
         } else {
-            self.check_decision(xt_id)
+            return None;
         };
+        let latency = xt.start_time.elapsed().as_secs_f64();
 
-        let decision = decision?;
-
-        let latency = self
-            .active_xts
-            .get(xt_id)
-            .map(|x| x.start_time.elapsed().as_secs_f64())
-            .unwrap_or(0.0);
-
-        self.release_chains(xt_id);
-        self.active_xts.remove(xt_id);
+        self.release_chains(id);
+        self.active_xts.remove(&id);
 
         let msg = ethera_spec_proto::Message {
             sender_id: "publisher".into(),
             payload: Some(ethera_spec_proto::Payload::Decided(
                 ethera_spec_proto::Decided {
-                    instance_id: instance_id_bytes.to_vec(),
+                    instance_id: id.as_bytes().to_vec(),
                     decision,
                 },
             )),
@@ -203,36 +190,30 @@ impl CoordinatorState {
     }
 
     /// Finds timed-out xTs and produces `Decided(false)` messages for each.
-    fn reap_timed_out(&mut self, timeout: Duration) -> Vec<(String, Vec<u8>)> {
+    fn reap_timed_out(&mut self, timeout: Duration) -> Vec<(InstanceId, Vec<u8>)> {
         let now = Instant::now();
-        let expired: Vec<String> = self
+        let expired: Vec<InstanceId> = self
             .active_xts
             .iter()
             .filter(|(_, xt)| now.duration_since(xt.start_time) >= timeout)
-            .map(|(id, _)| id.clone())
+            .map(|(id, _)| *id)
             .collect();
 
         let mut results = Vec::with_capacity(expired.len());
-        for xt_id in expired {
-            let instance_id_bytes = self
-                .active_xts
-                .get(&xt_id)
-                .map(|xt| xt.instance_id_bytes.clone())
-                .unwrap_or_default();
-
-            self.release_chains(&xt_id);
-            self.active_xts.remove(&xt_id);
+        for id in expired {
+            self.release_chains(id);
+            self.active_xts.remove(&id);
 
             let msg = ethera_spec_proto::Message {
                 sender_id: "publisher".into(),
                 payload: Some(ethera_spec_proto::Payload::Decided(
                     ethera_spec_proto::Decided {
-                        instance_id: instance_id_bytes,
+                        instance_id: id.as_bytes().to_vec(),
                         decision: false,
                     },
                 )),
             };
-            results.push((xt_id, msg.encode_to_vec()));
+            results.push((id, msg.encode_to_vec()));
         }
         results
     }
@@ -440,17 +421,25 @@ impl Coordinator {
         chain_id: ChainId,
         vote: bool,
     ) {
-        let xt_id = hex::encode(instance_id_bytes);
-        info!(xt_id, chain_id = %chain_id, vote, "Vote received");
+        let Ok(id_bytes) = <[u8; 32]>::try_from(instance_id_bytes) else {
+            warn!(
+                len = instance_id_bytes.len(),
+                chain_id = %chain_id,
+                "Ignoring vote: instance id must be 32 bytes"
+            );
+            return;
+        };
+        let id = InstanceId::new(id_bytes);
+        info!(xt_id = %id, chain_id = %chain_id, vote, "Vote received");
 
         let result = {
             let mut state = self.state.write().await;
-            state.record_vote(&xt_id, instance_id_bytes, chain_id, vote)
+            state.record_vote(id, chain_id, vote)
         };
 
         if let Some((decision, latency, data)) = result {
             info!(
-                xt_id,
+                xt_id = %id,
                 decision,
                 latency_ms = (latency * 1000.0) as u64,
                 "Decision reached"
@@ -466,7 +455,7 @@ impl Coordinator {
 
             self.inc_broadcasts();
             if let Err(e) = self.server.broadcast_raw(&data, "").await {
-                error!(xt_id, error = %e, "Failed to broadcast decision");
+                error!(xt_id = %id, error = %e, "Failed to broadcast decision");
             }
 
             self.drain_queue().await;
@@ -539,14 +528,14 @@ impl Coordinator {
             state.reap_timed_out(self.scp_timeout)
         };
 
-        for (xt_id, data) in &timed_out {
-            warn!(xt_id, "SCP timeout - deciding false");
+        for (id, data) in &timed_out {
+            warn!(xt_id = %id, "SCP timeout - deciding false");
             if let Some(m) = &self.metrics {
                 m.xt_decided_abort_total.inc();
             }
             self.inc_broadcasts();
             if let Err(e) = self.server.broadcast_raw(data, "").await {
-                error!(xt_id, error = %e, "Failed to broadcast timeout decision");
+                error!(xt_id = %id, error = %e, "Failed to broadcast timeout decision");
             }
         }
 
@@ -648,11 +637,6 @@ impl Coordinator {
                 collected, "All chains submitted proofs"
             );
 
-            if let Err(e) = validate_mailbox_consistency(&proofs) {
-                error!(superblock_number = submit_sb_number, error = %e, "Mailbox consistency check failed");
-                return;
-            }
-
             if let Some(submitter) = self.l1_submitter.clone() {
                 let state = self.state.clone();
                 tokio::spawn(async move {
@@ -699,42 +683,6 @@ impl Coordinator {
     }
 }
 
-fn validate_mailbox_consistency(proofs: &HashMap<u64, ProofData>) -> Result<(), String> {
-    for (&chain_i, proof_i) in proofs {
-        let mi = &proof_i.mailbox_info;
-        for (idx, inbox_chain) in mi.inbox_chains.iter().enumerate() {
-            let inbox_root = mi
-                .inbox_roots
-                .get(idx)
-                .ok_or_else(|| format!("chain {chain_i}: inbox_roots shorter than inbox_chains"))?;
-
-            // Find the counterparty chain whose outbox to chain_i should match.
-            let counterparty_proof = proofs.values().find(|p| {
-                p.mailbox_info
-                    .outbox_chains
-                    .iter()
-                    .any(|oc| oc == inbox_chain)
-            });
-
-            if let Some(cp) = counterparty_proof {
-                let cp_mi = &cp.mailbox_info;
-                if let Some(outbox_idx) =
-                    cp_mi.outbox_chains.iter().position(|oc| oc == inbox_chain)
-                {
-                    if let Some(outbox_root) = cp_mi.outbox_roots.get(outbox_idx) {
-                        if inbox_root != outbox_root {
-                            return Err(format!(
-                                "Mailbox mismatch: chain {chain_i} inbox from {inbox_chain} != counterparty outbox"
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Returns the unique participating chains in first-seen order.
 ///
 /// Reads chain ids straight from the wire request; converting to the domain
@@ -746,4 +694,63 @@ fn extract_chains(req: &ethera_spec_proto::XtRequest) -> Vec<ChainId> {
         .map(|tr| ChainId::new(tr.chain_id))
         .filter(|&c| seen.insert(c))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proto_xt(chain_ids: &[u64]) -> ethera_spec_proto::XtRequest {
+        ethera_spec_proto::XtRequest {
+            transaction_requests: chain_ids
+                .iter()
+                .map(|&id| ethera_spec_proto::TransactionRequest {
+                    chain_id: id,
+                    transaction: vec![vec![0x01]],
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn unanimous_yes_commits_and_releases_chains() {
+        let mut state = CoordinatorState::new();
+        let chains = vec![ChainId::new(1), ChainId::new(2)];
+        let (id, _) = state.prepare_xt(&proto_xt(&[1, 2]), &chains);
+
+        assert!(state.record_vote(id, ChainId::new(1), true).is_none());
+        let (decision, _, _) = state.record_vote(id, ChainId::new(2), true).unwrap();
+        assert!(decision);
+        assert!(!state.active_xts.contains_key(&id));
+        assert!(
+            state.active_chains.is_empty(),
+            "chains released on decision"
+        );
+    }
+
+    #[test]
+    fn any_no_aborts_immediately() {
+        let mut state = CoordinatorState::new();
+        let chains = vec![ChainId::new(1), ChainId::new(2), ChainId::new(3)];
+        let (id, _) = state.prepare_xt(&proto_xt(&[1, 2, 3]), &chains);
+
+        // One reject decides false without waiting for the remaining votes.
+        let (decision, _, _) = state.record_vote(id, ChainId::new(2), false).unwrap();
+        assert!(!decision);
+        assert!(!state.active_xts.contains_key(&id));
+    }
+
+    #[test]
+    fn ignores_non_participant_and_duplicate_votes() {
+        let mut state = CoordinatorState::new();
+        let chains = vec![ChainId::new(1), ChainId::new(2)];
+        let (id, _) = state.prepare_xt(&proto_xt(&[1, 2]), &chains);
+
+        assert!(state.record_vote(id, ChainId::new(99), true).is_none());
+        assert!(state.record_vote(id, ChainId::new(1), true).is_none());
+        // Duplicate vote from chain 1 must not count toward the quorum.
+        assert!(state.record_vote(id, ChainId::new(1), true).is_none());
+        let (decision, _, _) = state.record_vote(id, ChainId::new(2), true).unwrap();
+        assert!(decision);
+    }
 }
