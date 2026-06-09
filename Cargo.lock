@@ -2960,6 +2960,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ethera-spec",
  "humantime",
  "humantime-serde",
  "serde",

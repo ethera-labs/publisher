@@ -100,7 +100,7 @@ impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(60),
-            period_duration: Duration::from_secs(3840),
+            period_duration: ethera_spec::PERIOD_DURATION,
             proof_window: Duration::from_secs(7200),
         }
     }

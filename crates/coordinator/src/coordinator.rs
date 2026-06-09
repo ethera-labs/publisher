@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use crate::l1_submit::L1Submitter;
 use crate::proof_types::ProofData;
 
-use ethera_spec::{ChainId, PeriodId, SequenceNumber, SuperblockNumber, XtRequest};
+use ethera_spec::{
+    chains_from_request, ChainId, Instance, PeriodId, SequenceNumber, SuperblockNumber, XtRequest,
+};
 use ethera_spec_sbcp::generate_instance_id;
 use prost::Message;
 use tokio::sync::RwLock;
@@ -33,13 +35,6 @@ pub(crate) struct PendingEntry {
     pub chains: Vec<ChainId>,
 }
 
-#[derive(Debug, Clone)]
-struct ChainProof {
-    #[allow(dead_code)]
-    superblock_number: u64,
-    data: ProofData,
-}
-
 #[derive(Debug)]
 pub(crate) struct CoordinatorState {
     pub chain_to_client: HashMap<ChainId, String>,
@@ -54,7 +49,7 @@ pub(crate) struct CoordinatorState {
     pub last_finalized_superblock_hash: Vec<u8>,
     /// Latest proof per chain. op-succinct reports chain-local `end_block`,
     /// while the publisher owns the global superblock number used for settlement.
-    pending_proofs: HashMap<u64, ChainProof>,
+    pending_proofs: HashMap<u64, ProofData>,
     proof_collection_started: Option<Instant>,
 }
 
@@ -117,12 +112,17 @@ impl CoordinatorState {
         xt_req: &ethera_spec_proto::XtRequest,
         chains: &[ChainId],
     ) -> (String, Vec<u8>) {
-        let compose_req = proto_to_spec_xt(xt_req);
         let seq_num = self.next_sequence_num;
         let period_id = self.current_period_id;
-        let instance_id = generate_instance_id(period_id, seq_num, &compose_req);
-        let xt_id = instance_id.to_string();
-        self.next_sequence_num = SequenceNumber(seq_num.get() + 1);
+        let compose_req = XtRequest::from(xt_req);
+        let instance = Instance {
+            id: generate_instance_id(period_id, seq_num, &compose_req),
+            period_id,
+            sequence_number: seq_num,
+            xt_request: compose_req,
+        };
+        let xt_id = instance.id.to_string();
+        self.next_sequence_num = seq_num + 1;
 
         self.reserve_chains(&xt_id, chains);
         self.active_xts.insert(
@@ -130,7 +130,7 @@ impl CoordinatorState {
             ActiveXt {
                 chains: chains.to_vec(),
                 votes: HashMap::new(),
-                instance_id_bytes: instance_id.as_bytes().to_vec(),
+                instance_id_bytes: instance.id.as_bytes().to_vec(),
                 start_time: Instant::now(),
             },
         );
@@ -138,12 +138,7 @@ impl CoordinatorState {
         let msg = ethera_spec_proto::Message {
             sender_id: "publisher".into(),
             payload: Some(ethera_spec_proto::Payload::StartInstance(
-                ethera_spec_proto::StartInstance {
-                    instance_id: instance_id.as_bytes().to_vec(),
-                    period_id: period_id.get(),
-                    sequence_number: seq_num.get(),
-                    xt_request: Some(xt_req.clone()),
-                },
+                (&instance).into(),
             )),
         };
 
@@ -636,21 +631,11 @@ impl Coordinator {
                 state.proof_collection_started = Some(Instant::now());
             }
 
-            state.pending_proofs.insert(
-                chain_id,
-                ChainProof {
-                    superblock_number,
-                    data,
-                },
-            );
+            state.pending_proofs.insert(chain_id, data);
             let collected = state.pending_proofs.len();
 
             if total > 0 && collected >= total {
-                let proofs: HashMap<u64, ProofData> = state
-                    .pending_proofs
-                    .drain()
-                    .map(|(cid, cp)| (cid, cp.data))
-                    .collect();
+                let proofs: HashMap<u64, ProofData> = state.pending_proofs.drain().collect();
                 let sb = state.next_superblock_number.get();
                 state.proof_collection_started = None;
                 (collected, total, Some(proofs), sb)
@@ -753,26 +738,5 @@ fn validate_mailbox_consistency(proofs: &HashMap<u64, ProofData>) -> Result<(), 
 }
 
 fn extract_chains(req: &ethera_spec_proto::XtRequest) -> Vec<ChainId> {
-    let mut seen = std::collections::HashSet::new();
-    let mut chains = Vec::new();
-    for tr in &req.transaction_requests {
-        let cid = ChainId::new(tr.chain_id);
-        if seen.insert(cid) {
-            chains.push(cid);
-        }
-    }
-    chains
-}
-
-fn proto_to_spec_xt(req: &ethera_spec_proto::XtRequest) -> XtRequest {
-    XtRequest {
-        transactions: req
-            .transaction_requests
-            .iter()
-            .map(|tr| ethera_spec::TransactionRequest {
-                chain_id: ChainId::new(tr.chain_id),
-                transactions: tr.transaction.clone(),
-            })
-            .collect(),
-    }
+    chains_from_request(&XtRequest::from(req))
 }
