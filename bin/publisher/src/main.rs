@@ -51,9 +51,13 @@ async fn main() -> Result<()> {
             &s.l2oo_address,
             s.l1_rpc_url.clone(),
             s.proposer_key.clone(),
+            s.mock,
         ) {
             Ok(sub) => {
-                info!("L1 submitter configured for {}", s.l2oo_address);
+                info!(
+                    mock = s.mock,
+                    "L1 submitter configured for {}", s.l2oo_address
+                );
                 Some(sub)
             }
             Err(e) => {
