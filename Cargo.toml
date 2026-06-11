@@ -28,6 +28,7 @@ publisher-server = { path = "crates/server" }
 ethera-spec = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec" }
 ethera-spec-proto = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec-proto" }
 ethera-spec-sbcp = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec-sbcp" }
+ethera-spec-scp = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec-scp" }
 
 # Async
 tokio = { version = "1.43", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -105,3 +106,11 @@ semicolon_if_nothing_returned = "warn"
 lto = "thin"
 strip = true
 codegen-units = 1
+
+# Temporary: builds against the local specs checkout until update_chains/accessors/
+# pub rollback land on feat/compose-rs; then remove this section and `cargo update`.
+[patch."https://github.com/ethera-labs/specs.git"]
+ethera-spec = { path = "specs/crates/ethera" }
+ethera-spec-proto = { path = "specs/crates/proto" }
+ethera-spec-sbcp = { path = "specs/crates/sbcp" }
+ethera-spec-scp = { path = "specs/crates/scp" }

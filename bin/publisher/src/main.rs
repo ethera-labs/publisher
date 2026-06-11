@@ -70,19 +70,45 @@ async fn main() -> Result<()> {
         None
     };
 
+    // The spec publisher takes the settled state at construction, so read it
+    // from L1 first.
+    let (last_finalized, last_finalized_hash) = match &l1_submitter {
+        Some(sub) => match sub.fetch_latest_superblock_state().await {
+            Ok(Some((number, hash))) => {
+                info!(
+                    last_finalized = number,
+                    "Initialized superblock state from L1"
+                );
+                (number, hash.0)
+            }
+            Ok(None) => {
+                info!("No superblocks on L1 yet - starting from genesis");
+                (0, [0u8; 32])
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to read L1 superblock state - starting from genesis");
+                (0, [0u8; 32])
+            }
+        },
+        None => (0, [0u8; 32]),
+    };
+
     let coordinator_builder = Coordinator::new(
         server.clone(),
         metrics.clone(),
         cfg.consensus.timeout,
         cfg.consensus.proof_window,
-    );
+        cfg.consensus.proof_window_periods,
+        last_finalized,
+        last_finalized_hash,
+    )?;
     let coordinator = Arc::new(if let Some(sub) = l1_submitter {
         coordinator_builder.with_l1_submitter(sub)
     } else {
         coordinator_builder
     });
 
-    coordinator.init_from_l1().await;
+    tokio::spawn(coordinator.clone().run_outbound());
 
     let coord_for_handler = coordinator.clone();
     let on_message = Arc::new(move |client_id: String, data: Vec<u8>| {
@@ -149,9 +175,7 @@ async fn period_loop(coordinator: Arc<Coordinator>, period_duration: Duration) {
 
     loop {
         interval.tick().await;
-        if let Err(e) = coordinator.advance_period().await {
-            error!(error = %e, "Failed to broadcast period");
-        }
+        coordinator.start_period();
     }
 }
 
@@ -163,7 +187,7 @@ async fn reaper_loop(coordinator: Arc<Coordinator>) {
     loop {
         interval.tick().await;
         coordinator.reap_timed_out_xts().await;
-        coordinator.reap_expired_proofs().await;
+        coordinator.reap_expired_proofs();
     }
 }
 

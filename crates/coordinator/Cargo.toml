@@ -12,6 +12,7 @@ publisher-metrics.workspace = true
 ethera-spec.workspace = true
 ethera-spec-proto.workspace = true
 ethera-spec-sbcp.workspace = true
+ethera-spec-scp.workspace = true
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true

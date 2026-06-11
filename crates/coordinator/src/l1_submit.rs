@@ -1,6 +1,5 @@
 //! L1 settlement - builds and submits superblock proofs to `ComposeL2OutputOracle`.
 
-use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -110,14 +109,11 @@ impl L1Submitter {
         Ok(Some((sb_num, sb_hash)))
     }
 
-    pub async fn submit(
-        &self,
-        superblock_number: u64,
-        proofs: &HashMap<u64, ProofData>,
-    ) -> Result<()> {
+    /// Submits the superblock to L1 and returns its hash on success.
+    pub async fn submit(&self, superblock_number: u64, proofs: &[ProofData]) -> Result<B256> {
         // Sort by rollup_config_hash so bootInfo and the proof payload
-        // share one deterministic order (HashMap iteration order is not stable).
-        let mut ordered: Vec<&ProofData> = proofs.values().collect();
+        // share one deterministic order.
+        let mut ordered: Vec<&ProofData> = proofs.iter().collect();
         ordered.sort_by_key(|p| p.aggregation_outputs.rollup_config_hash);
 
         let boot_infos: Vec<BootInfoStruct> = ordered
@@ -158,7 +154,7 @@ impl L1Submitter {
 
         // Use the highest l1_head across all chains for deterministic selection.
         let l1_hash = proofs
-            .values()
+            .iter()
             .map(|p| p.aggregation_outputs.l1_head)
             .max()
             .unwrap_or(B256::ZERO);
@@ -189,9 +185,9 @@ impl L1Submitter {
                             tx_hash = %receipt.transaction_hash,
                             "Superblock submitted to L1"
                         );
-                        *self.parent_hash.lock().unwrap() =
-                            keccak256(agg_outputs.abi_encode().as_slice());
-                        return Ok(());
+                        let superblock_hash = keccak256(agg_outputs.abi_encode().as_slice());
+                        *self.parent_hash.lock().unwrap() = superblock_hash;
+                        return Ok(superblock_hash);
                     }
                     Err(e) => {
                         last_err = Some(e.into());

@@ -34,19 +34,31 @@ The publisher is the **coordinator** side of a 2-Phase Commit (2PC) protocol for
 rollups. Sidecars (one per rollup sequencer) connect to the publisher over QUIC; the publisher orchestrates cross-rollup
 transactions (xTs) so that every involved chain either commits or aborts together.
 
+Protocol state lives in the spec crates: `ethera_spec_sbcp::Publisher` owns periods, superblock numbering, chain
+reservation, and proof aggregation; one `ethera_spec_scp::PublisherInstance` per in-flight xT owns vote collection.
+The coordinator owns only transport, scheduling, and L1 infrastructure. The spec state machines are synchronous; their
+effect traits are implemented by `bridge::OutboundSink` as non-blocking mpsc enqueues drained by an async task
+(`Coordinator::run_outbound`) that performs the QUIC broadcasts and L1 submissions.
+
 ### Request lifecycle
 
 1. A sidecar sends an `XtRequest` (length-prefixed protobuf over QUIC).
-2. `Coordinator::handle_xt_request` checks if any target chains are already locked in an active xT. If so, the request
-   is queued (max 100 entries); otherwise it immediately calls `prepare_xt`, which assigns a `PeriodId`/
-   `SequenceNumber`, computes the `instance_id`, and broadcasts `StartInstance` to all connected sidecars.
-3. Each sidecar votes via a `Vote` message. `Coordinator::handle_vote` collects votes: one `false` vote triggers
+2. `Coordinator::handle_xt_request` calls `sbcp::Publisher::start_instance`. If any target chain is reserved by an
+   active xT the request is queued (max 100 entries); otherwise the spec assigns `PeriodId`/`SequenceNumber`, computes
+   the `instance_id`, and a `scp::PublisherInstance` broadcasts `StartInstance` to all connected sidecars.
+3. Each sidecar votes via a `Vote` message routed to `scp::PublisherInstance::process_vote`: one `false` vote triggers
    immediate `Decided(false)`; unanimous `true` votes produce `Decided(true)`.
-4. After decision, `drain_queue` attempts to start the next queued xT whose chains are no longer locked.
-5. A background `reaper_loop` (1 s tick) calls `reap_timed_out_xts` to abort stale xTs that exceed
-   `consensus.timeout`, and `reap_expired_proofs` to clear stale proof sets and trigger rollback.
-6. The publisher also broadcasts `StartPeriod` on the configured `consensus.period_duration` cadence and can
-   broadcast `Rollback`.
+4. After decision, `sbcp::Publisher::decide_instance` releases the chains and `drain_queue` starts the next queued xT
+   whose chains are free.
+5. A background `reaper_loop` (1 s tick) calls `reap_timed_out_xts` (`scp` `timeout()`) to abort stale xTs that exceed
+   `consensus.timeout`, and `reap_expired_proofs`, which arms a `consensus.proof_window` timer once a terminated
+   superblock awaits proofs and triggers `sbcp` `proof_timeout()` (rollback) on expiry.
+6. `period_loop` calls `sbcp::Publisher::start_period` on the `consensus.period_duration` cadence: it advances the
+   target superblock, broadcasts `StartPeriod`, and refuses (backpressure) once more than
+   `consensus.proof_window_periods` superblocks are unfinalized.
+7. Proofs are validated and aggregated by `sbcp::Publisher::receive_proof` (ordering, period, duplicates). When all
+   registered chains have reported, the bundle is submitted to L1; success advances the settled state via
+   `advance_settled_state`, failure triggers `rollback()`.
 
 ### Crate responsibilities
 
@@ -54,7 +66,7 @@ transactions (xTs) so that every involved chain either commits or aborts togethe
 |----------------------|-----------------------------------------------------------------------------------------|
 | `bin/publisher`      | `main`: wires QUIC server, coordinator, HTTP API; period loop, reaper loop, shutdown    |
 | `crates/config`      | YAML config + env-var overrides (`SECTION_FIELD` convention, no prefix)                 |
-| `crates/coordinator` | 2PC state machine (`CoordinatorState`), message dispatch (`handlers`), xT/proof reaping |
+| `crates/coordinator` | Bridges spec state machines to QUIC/L1 (`bridge`), message dispatch (`handlers`), queueing, reaping |
 | `crates/transport`   | QUIC server (quinn), length-prefixed framing, self-signed TLS, per-connection callbacks |
 | `crates/server`      | Axum HTTP API: `/health`, `/ready`, `/stats`, `/metrics`                                |
 | `crates/metrics`     | Prometheus metrics via `prometheus-client`                                              |
@@ -62,12 +74,15 @@ transactions (xTs) so that every involved chain either commits or aborts togethe
 
 ### Key internal invariants
 
-- **`CoordinatorState` is behind a single `Arc<RwLock<...>>`** -- all mutations acquire a write lock; reads acquire a
-  read lock. Avoid holding the lock across `.await` points (the existing pattern drops it before broadcasting).
+- **Spec effect-trait implementations never block**: `bridge::OutboundSink` only enqueues onto an unbounded mpsc
+  channel because the spec invokes its traits while holding its internal `std::sync::Mutex`. Never `.await` (or do
+  I/O) inside a spec callback.
 - **Instance ID** is a deterministic hash of `(PeriodId, SequenceNumber, XtRequest)` computed by `generate_instance_id`
-  in the SBCP spec crate. Stored and looked up as `hex::encode(instance_id.as_bytes())`.
-- **Chain reservation** (`active_chains` map) prevents two concurrent xTs from touching the same chain. Chains are
-  reserved in `prepare_xt` and released in `record_vote` once a decision is reached (or on timeout).
+  in the SBCP spec crate.
+- **Chain reservation** lives in `sbcp::Publisher`: chains are reserved by `start_instance` and released by
+  `decide_instance` (or cleared wholesale on rollback, which also abandons in-flight `scp` instances).
+- **Chain membership is dynamic**: handshakes update the registry and push the full set into
+  `sbcp::Publisher::update_chains`, which defines when "all proofs" are collected.
 - **`/ready` returns 503** until at least one sidecar is connected (checked via `QuicServer::connection_count`).
 
 ### Wire protocol
@@ -90,6 +105,7 @@ Environment variables override YAML values (uppercase `SECTION_FIELD` convention
 | `consensus.timeout`         | `CONSENSUS_TIMEOUT`         | `60s`          |
 | `consensus.period_duration` | `CONSENSUS_PERIOD_DURATION` | `3840s`        |
 | `consensus.proof_window`    | `CONSENSUS_PROOF_WINDOW`    | `7200s`        |
+| `consensus.proof_window_periods` | `CONSENSUS_PROOF_WINDOW_PERIODS` | `168`  |
 | `metrics.enabled`           | `METRICS_ENABLED`           | `true`         |
 | `log.level`                 | `LOG_LEVEL`                 | `info`         |
 | `log.pretty`                | `LOG_PRETTY`                | `false`        |
