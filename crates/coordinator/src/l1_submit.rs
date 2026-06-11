@@ -52,18 +52,25 @@ pub struct L1Submitter {
     l2oo_address: Address,
     rpc_url: String,
     private_key: String,
+    mock: bool,
     /// Tracks the hash of the last successfully submitted superblock so
     /// each new submission can reference its parent. Seeded from L1 on startup.
     parent_hash: Mutex<B256>,
 }
 
 impl L1Submitter {
-    pub fn new(l2oo_address: &str, rpc_url: String, private_key: String) -> Result<Self> {
+    pub fn new(
+        l2oo_address: &str,
+        rpc_url: String,
+        private_key: String,
+        mock: bool,
+    ) -> Result<Self> {
         let addr: Address = l2oo_address.parse().context("invalid l2oo_address")?;
         Ok(Self {
             l2oo_address: addr,
             rpc_url,
             private_key,
+            mock,
             parent_hash: Mutex::new(B256::ZERO),
         })
     }
@@ -108,7 +115,7 @@ impl L1Submitter {
         superblock_number: u64,
         proofs: &HashMap<u64, ProofData>,
     ) -> Result<()> {
-        // Sort by rollup_config_hash so bootInfo and the concatenated proof bytes
+        // Sort by rollup_config_hash so bootInfo and the proof payload
         // share one deterministic order (HashMap iteration order is not stable).
         let mut ordered: Vec<&ProofData> = proofs.values().collect();
         ordered.sort_by_key(|p| p.aggregation_outputs.rollup_config_hash);
@@ -134,10 +141,14 @@ impl L1Submitter {
             bootInfo: boot_infos,
         };
 
-        let proof_bytes: Vec<u8> = ordered
-            .iter()
-            .flat_map(|p| p.compressed_proof.iter().copied())
-            .collect();
+        let proof_bytes: Vec<u8> = if self.mock {
+            Vec::new()
+        } else {
+            ordered
+                .iter()
+                .flat_map(|p| p.compressed_proof.iter().copied())
+                .collect()
+        };
 
         let extra_data: Bytes = (agg_outputs.clone(), Bytes::from(proof_bytes))
             .abi_encode_params()
