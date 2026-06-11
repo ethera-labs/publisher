@@ -1670,12 +1670,12 @@ dependencies = [
 [[package]]
 name = "ethera-spec"
 version = "0.1.0"
-source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#787382c0bcb03ca975a02aec96a077a390fade2d"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#36e5294a3124eb792be93feb67942a14d54a8a8e"
 
 [[package]]
 name = "ethera-spec-proto"
 version = "0.1.0"
-source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#787382c0bcb03ca975a02aec96a077a390fade2d"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#36e5294a3124eb792be93feb67942a14d54a8a8e"
 dependencies = [
  "ethera-spec",
  "prost",
@@ -1684,7 +1684,7 @@ dependencies = [
 [[package]]
 name = "ethera-spec-sbcp"
 version = "0.1.0"
-source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#787382c0bcb03ca975a02aec96a077a390fade2d"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#36e5294a3124eb792be93feb67942a14d54a8a8e"
 dependencies = [
  "ethera-spec",
  "ethera-spec-scp",
@@ -1696,7 +1696,7 @@ dependencies = [
 [[package]]
 name = "ethera-spec-scp"
 version = "0.1.0"
-source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#787382c0bcb03ca975a02aec96a077a390fade2d"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#36e5294a3124eb792be93feb67942a14d54a8a8e"
 dependencies = [
  "ethera-spec",
  "thiserror 2.0.18",

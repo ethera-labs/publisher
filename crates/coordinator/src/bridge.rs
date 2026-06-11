@@ -16,6 +16,10 @@ use crate::proof_types::ProofData;
 pub(crate) enum Outbound {
     Broadcast(Vec<u8>),
     Rollback(Vec<u8>),
+    AggregateProofs {
+        superblock_number: SuperblockNumber,
+        proofs: HashMap<ChainId, ProofData>,
+    },
     SubmitProof {
         superblock_number: SuperblockNumber,
         proofs: Vec<ProofData>,
@@ -104,15 +108,18 @@ impl ethera_spec_sbcp::PublisherProver for OutboundSink {
     type SuperblockProof = Vec<ProofData>;
 
     /// Per-chain aggregation proofs arrive already final (op-succinct); the
-    /// superblock "network proof" is their bundle, assembled into L1 calldata
-    /// by the submitter.
+    /// superblock "network proof" is their bundle, completed by the outbound
+    /// task via `superblock_proof_ready`.
     fn request_superblock_proof(
         &self,
-        _superblock_number: SuperblockNumber,
+        superblock_number: SuperblockNumber,
         _last_superblock_hash: SuperblockHash,
         proofs: HashMap<ChainId, ProofData>,
-    ) -> Result<Vec<ProofData>, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(proofs.into_values().collect())
+    ) {
+        self.enqueue(Outbound::AggregateProofs {
+            superblock_number,
+            proofs,
+        });
     }
 }
 

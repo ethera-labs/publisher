@@ -57,10 +57,13 @@ implemented by `bridge::OutboundSink` as non-blocking mpsc enqueues drained by a
 5. `period_loop` calls `sbcp::Publisher::start_period` on the `consensus.period_duration` cadence: it advances the
    target superblock, broadcasts `StartPeriod`, and refuses (backpressure) once more than
    `consensus.proof_window_periods` superblocks are unfinalized.
-6. Proofs (`ProofData` is the spec's generic `ChainProof` type) are validated and aggregated by
+6. Proofs (`ProofData` is the spec's generic `ChainProof` type) are validated and collected by
    `sbcp::Publisher::receive_proof` (chain membership, ordering, period, duplicates — rejections are returned as
-   `PublisherError`). When all registered chains have reported, the bundle is submitted to L1; success advances the
-   settled state via `advance_settled_state`, failure triggers `rollback()`, which also abandons in-flight instances.
+   `PublisherError`). When all registered chains have reported, the spec requests superblock proof generation
+   (`PublisherProver` is fire-and-forget since real proving is long-running); the result is fed back via
+   `superblock_proof_ready` (→ L1 submission, success advances the settled state) or `superblock_proof_failed`
+   (→ `rollback()`, which also abandons in-flight instances and invalidates the pending aggregation). In this
+   deployment aggregation is the identity (op-succinct proofs are final), completed inline by the outbound task.
 
 ### Crate responsibilities
 

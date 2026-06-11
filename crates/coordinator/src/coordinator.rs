@@ -161,11 +161,35 @@ impl Coordinator {
                     self.broadcast(&data).await;
                     self.drain_queue().await;
                 }
+                Outbound::AggregateProofs {
+                    superblock_number,
+                    proofs,
+                } => self.complete_aggregation(superblock_number, proofs),
                 Outbound::SubmitProof {
                     superblock_number,
                     proofs,
                 } => self.spawn_l1_submit(superblock_number, proofs),
             }
+        }
+    }
+
+    /// Per-chain proofs are already aggregated by op-succinct, so the
+    /// superblock proof is just their bundle, fed straight back to the spec.
+    /// A real long-running prover would respond from its own task instead.
+    fn complete_aggregation(
+        &self,
+        superblock_number: SuperblockNumber,
+        proofs: HashMap<ChainId, ProofData>,
+    ) {
+        if let Err(e) = self
+            .sbcp
+            .superblock_proof_ready(superblock_number, proofs.into_values().collect())
+        {
+            warn!(
+                superblock_number = superblock_number.get(),
+                error = %e,
+                "Dropping superblock proof"
+            );
         }
     }
 
@@ -534,7 +558,7 @@ mod tests {
     fn decode_payload(event: Outbound) -> ethera_spec_proto::Payload {
         let data = match event {
             Outbound::Broadcast(data) | Outbound::Rollback(data) => data,
-            Outbound::SubmitProof { .. } => panic!("expected broadcast, got proof submission"),
+            other => panic!("expected broadcast, got {other:?}"),
         };
         ethera_spec_proto::Message::decode(data.as_slice())
             .unwrap()
@@ -671,6 +695,20 @@ mod tests {
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
 
         c.receive_chain_proof(2, ProofData::default()).unwrap();
+        let (superblock, chain_proofs) = match rx.try_recv().unwrap() {
+            Outbound::AggregateProofs {
+                superblock_number,
+                proofs,
+            } => {
+                assert_eq!(superblock_number, SuperblockNumber(1));
+                assert_eq!(proofs.len(), 2);
+                (superblock_number, proofs)
+            }
+            other => panic!("expected AggregateProofs, got {other:?}"),
+        };
+
+        // Identity aggregation feeds the bundle back and publishes to L1.
+        c.complete_aggregation(superblock, chain_proofs);
         match rx.try_recv().unwrap() {
             Outbound::SubmitProof {
                 superblock_number,
