@@ -3,10 +3,12 @@
 //! internal lock, so every implementation here only enqueues onto an mpsc
 //! channel; a dedicated task performs the actual QUIC broadcast / L1 submit.
 
-use ethera_spec::{Instance, InstanceId, PeriodId, SuperblockHash, SuperblockNumber};
+use std::collections::HashMap;
+
+use ethera_spec::{ChainId, Instance, InstanceId, PeriodId, SuperblockHash, SuperblockNumber};
 use prost::Message as _;
 use tokio::sync::mpsc;
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::proof_types::ProofData;
 
@@ -98,36 +100,29 @@ impl ethera_spec_sbcp::PublisherMessenger for OutboundSink {
 }
 
 impl ethera_spec_sbcp::PublisherProver for OutboundSink {
+    type ChainProof = ProofData;
+    type SuperblockProof = Vec<ProofData>;
+
     /// Per-chain aggregation proofs arrive already final (op-succinct); the
     /// superblock "network proof" is their bundle, assembled into L1 calldata
-    /// by the submitter. A malformed proof fails here, which makes the spec
-    /// trigger a rollback (settlement pipeline failure).
+    /// by the submitter.
     fn request_superblock_proof(
         &self,
         _superblock_number: SuperblockNumber,
         _last_superblock_hash: SuperblockHash,
-        proofs: Vec<Vec<u8>>,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let proofs: Vec<ProofData> = proofs
-            .iter()
-            .map(|p| serde_json::from_slice(p))
-            .collect::<Result<_, _>>()?;
-        Ok(serde_json::to_vec(&proofs)?)
+        proofs: HashMap<ChainId, ProofData>,
+    ) -> Result<Vec<ProofData>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(proofs.into_values().collect())
     }
 }
 
 impl ethera_spec_sbcp::L1Publisher for OutboundSink {
-    fn publish_proof(&self, superblock_number: SuperblockNumber, proof: Vec<u8>) {
-        match serde_json::from_slice(&proof) {
-            Ok(proofs) => self.enqueue(Outbound::SubmitProof {
-                superblock_number,
-                proofs,
-            }),
-            Err(e) => error!(
-                superblock_number = superblock_number.get(),
-                error = %e,
-                "Invalid superblock proof payload, dropping"
-            ),
-        }
+    type SuperblockProof = Vec<ProofData>;
+
+    fn publish_proof(&self, superblock_number: SuperblockNumber, proof: Vec<ProofData>) {
+        self.enqueue(Outbound::SubmitProof {
+            superblock_number,
+            proofs: proof,
+        });
     }
 }

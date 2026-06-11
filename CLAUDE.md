@@ -35,9 +35,10 @@ rollups. Sidecars (one per rollup sequencer) connect to the publisher over QUIC;
 transactions (xTs) so that every involved chain either commits or aborts together.
 
 Protocol state lives in the spec crates: `ethera_spec_sbcp::Publisher` owns periods, superblock numbering, chain
-reservation, and proof aggregation; one `ethera_spec_scp::PublisherInstance` per in-flight xT owns vote collection.
-The coordinator owns only transport, scheduling, and L1 infrastructure. The spec state machines are synchronous; their
-effect traits are implemented by `bridge::OutboundSink` as non-blocking mpsc enqueues drained by an async task
+reservation, proof aggregation, and one `ethera_spec_scp::PublisherInstance` per in-flight xT (created by
+`start_instance`, fed by `process_vote`/`timeout_instance`). The coordinator owns only transport, scheduling
+(timers, pending-xT queue), and L1 infrastructure. The spec state machines are synchronous; their effect traits are
+implemented by `bridge::OutboundSink` as non-blocking mpsc enqueues drained by an async task
 (`Coordinator::run_outbound`) that performs the QUIC broadcasts and L1 submissions.
 
 ### Request lifecycle
@@ -45,20 +46,21 @@ effect traits are implemented by `bridge::OutboundSink` as non-blocking mpsc enq
 1. A sidecar sends an `XtRequest` (length-prefixed protobuf over QUIC).
 2. `Coordinator::handle_xt_request` calls `sbcp::Publisher::start_instance`. If any target chain is reserved by an
    active xT the request is queued (max 100 entries); otherwise the spec assigns `PeriodId`/`SequenceNumber`, computes
-   the `instance_id`, and a `scp::PublisherInstance` broadcasts `StartInstance` to all connected sidecars.
-3. Each sidecar votes via a `Vote` message routed to `scp::PublisherInstance::process_vote`: one `false` vote triggers
-   immediate `Decided(false)`; unanimous `true` votes produce `Decided(true)`.
-4. After decision, `sbcp::Publisher::decide_instance` releases the chains and `drain_queue` starts the next queued xT
-   whose chains are free.
-5. A background `reaper_loop` (1 s tick) calls `reap_timed_out_xts` (`scp` `timeout()`) to abort stale xTs that exceed
-   `consensus.timeout`, and `reap_expired_proofs`, which arms a `consensus.proof_window` timer once a terminated
-   superblock awaits proofs and triggers `sbcp` `proof_timeout()` (rollback) on expiry.
-6. `period_loop` calls `sbcp::Publisher::start_period` on the `consensus.period_duration` cadence: it advances the
+   the `instance_id`, creates the SCP instance, and broadcasts `StartInstance` to all connected sidecars.
+3. Each sidecar votes via a `Vote` message routed to `sbcp::Publisher::process_vote`: one `false` vote triggers
+   immediate `Decided(false)`; unanimous `true` votes produce `Decided(true)`. On decision the spec releases the
+   chains; the coordinator records metrics and `drain_queue` starts the next queued xT whose chains are free.
+4. A background `reaper_loop` (1 s tick) calls `reap_timed_out_xts` (`sbcp` `timeout_instance()`) to abort stale xTs
+   that exceed `consensus.timeout`, and `reap_expired_proofs`, which arms a `consensus.proof_window` timer while
+   `settling_superblock()` reports a terminated superblock awaiting proofs and triggers `proof_timeout()` (rollback)
+   on expiry.
+5. `period_loop` calls `sbcp::Publisher::start_period` on the `consensus.period_duration` cadence: it advances the
    target superblock, broadcasts `StartPeriod`, and refuses (backpressure) once more than
    `consensus.proof_window_periods` superblocks are unfinalized.
-7. Proofs are validated and aggregated by `sbcp::Publisher::receive_proof` (ordering, period, duplicates). When all
-   registered chains have reported, the bundle is submitted to L1; success advances the settled state via
-   `advance_settled_state`, failure triggers `rollback()`.
+6. Proofs (`ProofData` is the spec's generic `ChainProof` type) are validated and aggregated by
+   `sbcp::Publisher::receive_proof` (chain membership, ordering, period, duplicates — rejections are returned as
+   `PublisherError`). When all registered chains have reported, the bundle is submitted to L1; success advances the
+   settled state via `advance_settled_state`, failure triggers `rollback()`, which also abandons in-flight instances.
 
 ### Crate responsibilities
 
@@ -79,8 +81,9 @@ effect traits are implemented by `bridge::OutboundSink` as non-blocking mpsc enq
   I/O) inside a spec callback.
 - **Instance ID** is a deterministic hash of `(PeriodId, SequenceNumber, XtRequest)` computed by `generate_instance_id`
   in the SBCP spec crate.
-- **Chain reservation** lives in `sbcp::Publisher`: chains are reserved by `start_instance` and released by
-  `decide_instance` (or cleared wholesale on rollback, which also abandons in-flight `scp` instances).
+- **Chain reservation** lives in `sbcp::Publisher`: chains are reserved by `start_instance` and released when the
+  instance decides (`process_vote`/`timeout_instance`), or cleared wholesale on rollback together with all in-flight
+  instances.
 - **Chain membership is dynamic**: handshakes update the registry and push the full set into
   `sbcp::Publisher::update_chains`, which defines when "all proofs" are collected.
 - **`/ready` returns 503** until at least one sidecar is connected (checked via `QuicServer::connection_count`).

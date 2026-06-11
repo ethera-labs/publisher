@@ -108,11 +108,12 @@ async fn handle_proof(
         compressed_proof: proof.proof_data,
         agg_vkey_hash: Default::default(),
     };
-    coordinator.receive_proof(
+    // Rejections are logged by the spec with full context.
+    let _ = coordinator.receive_proof(
         proof.period_id,
         proof.superblock_number,
         chain_id.get(),
-        &data,
+        data,
     );
 }
 

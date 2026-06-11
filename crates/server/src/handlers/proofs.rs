@@ -79,8 +79,8 @@ pub async fn handle_submit_proof(
         agg_vkey_hash: body.agg_vkey_hash,
     };
 
-    match state.coordinator.receive_chain_proof(body.chain_id, &data) {
-        Ok(()) => StatusCode::ACCEPTED,
+    match state.coordinator.receive_chain_proof(body.chain_id, data) {
+        Ok(_) => StatusCode::ACCEPTED,
         Err(e) => {
             warn!(
                 chain_id = body.chain_id,
