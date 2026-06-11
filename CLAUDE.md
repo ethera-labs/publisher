@@ -67,15 +67,15 @@ implemented by `bridge::OutboundSink` as non-blocking mpsc enqueues drained by a
 
 ### Crate responsibilities
 
-| Crate                | Role                                                                                    |
-|----------------------|-----------------------------------------------------------------------------------------|
-| `bin/publisher`      | `main`: wires QUIC server, coordinator, HTTP API; period loop, reaper loop, shutdown    |
-| `crates/config`      | YAML config + env-var overrides (`SECTION_FIELD` convention, no prefix)                 |
+| Crate                | Role                                                                                                |
+|----------------------|-----------------------------------------------------------------------------------------------------|
+| `bin/publisher`      | `main`: wires QUIC server, coordinator, HTTP API; period loop, reaper loop, shutdown                |
+| `crates/config`      | YAML config + env-var overrides (`SECTION_FIELD` convention, no prefix)                             |
 | `crates/coordinator` | Bridges spec state machines to QUIC/L1 (`bridge`), message dispatch (`handlers`), queueing, reaping |
-| `crates/transport`   | QUIC server (quinn), length-prefixed framing, self-signed TLS, per-connection callbacks |
-| `crates/server`      | Axum HTTP API: `/health`, `/ready`, `/stats`, `/metrics`                                |
-| `crates/metrics`     | Prometheus metrics via `prometheus-client`                                              |
-| `crates/tracing`     | `tracing-subscriber` setup (json or pretty format)                                      |
+| `crates/transport`   | QUIC server (quinn), length-prefixed framing, self-signed TLS, per-connection callbacks             |
+| `crates/server`      | Axum HTTP API: `/health`, `/ready`, `/stats`, `/metrics`                                            |
+| `crates/metrics`     | Prometheus metrics via `prometheus-client`                                                          |
+| `crates/tracing`     | `tracing-subscriber` setup (json or pretty format)                                                  |
 
 ### Key internal invariants
 
@@ -102,20 +102,20 @@ encryption).
 Configuration is loaded from a YAML file (`config.yaml` by default, override with `--config <path>`).
 Environment variables override YAML values (uppercase `SECTION_FIELD` convention, no prefix):
 
-| YAML Key                    | Env Override                | Default        |
-|-----------------------------|-----------------------------|----------------|
-| `server.listen_addr`        | `SERVER_LISTEN_ADDR`        | `0.0.0.0:8080` |
-| `server.max_message_size`   | `SERVER_MAX_MESSAGE_SIZE`   | `4194304`      |
-| `api.listen_addr`           | `API_LISTEN_ADDR`           | `0.0.0.0:8081` |
-| `api.request_timeout`       | `API_REQUEST_TIMEOUT`       | `15s`          |
-| `consensus.timeout`         | `CONSENSUS_TIMEOUT`         | `60s`          |
-| `consensus.period_duration` | `CONSENSUS_PERIOD_DURATION` | `3840s`        |
-| `consensus.proof_window`    | `CONSENSUS_PROOF_WINDOW`    | `7200s`        |
-| `consensus.proof_window_periods` | `CONSENSUS_PROOF_WINDOW_PERIODS` | `168`  |
-| `metrics.enabled`           | `METRICS_ENABLED`           | `true`         |
-| `log.level`                 | `LOG_LEVEL`                 | `info`         |
-| `log.pretty`                | `LOG_PRETTY`                | `false`        |
-| `settlement.l1_rpc_url`     | `SETTLEMENT_L1_RPC_URL`     | empty          |
-| `settlement.l2oo_address`   | `SETTLEMENT_L2OO_ADDRESS`   | empty          |
-| `settlement.proposer_key`   | `SETTLEMENT_PROPOSER_KEY`   | empty          |
-| `settlement.mock`           | `SETTLEMENT_MOCK`           | `false`        |
+| YAML Key                         | Env Override                     | Default        |
+|----------------------------------|----------------------------------|----------------|
+| `server.listen_addr`             | `SERVER_LISTEN_ADDR`             | `0.0.0.0:8080` |
+| `server.max_message_size`        | `SERVER_MAX_MESSAGE_SIZE`        | `4194304`      |
+| `api.listen_addr`                | `API_LISTEN_ADDR`                | `0.0.0.0:8081` |
+| `api.request_timeout`            | `API_REQUEST_TIMEOUT`            | `15s`          |
+| `consensus.timeout`              | `CONSENSUS_TIMEOUT`              | `60s`          |
+| `consensus.period_duration`      | `CONSENSUS_PERIOD_DURATION`      | `3840s`        |
+| `consensus.proof_window`         | `CONSENSUS_PROOF_WINDOW`         | `7200s`        |
+| `consensus.proof_window_periods` | `CONSENSUS_PROOF_WINDOW_PERIODS` | `168`          |
+| `metrics.enabled`                | `METRICS_ENABLED`                | `true`         |
+| `log.level`                      | `LOG_LEVEL`                      | `info`         |
+| `log.pretty`                     | `LOG_PRETTY`                     | `false`        |
+| `settlement.l1_rpc_url`          | `SETTLEMENT_L1_RPC_URL`          | empty          |
+| `settlement.l2oo_address`        | `SETTLEMENT_L2OO_ADDRESS`        | empty          |
+| `settlement.proposer_key`        | `SETTLEMENT_PROPOSER_KEY`        | empty          |
+| `settlement.mock`                | `SETTLEMENT_MOCK`                | `false`        |
