@@ -1670,10 +1670,12 @@ dependencies = [
 [[package]]
 name = "ethera-spec"
 version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#09bd5699e2fd347e1c4611cfde8b56d4e6e1ab41"
 
 [[package]]
 name = "ethera-spec-proto"
 version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#09bd5699e2fd347e1c4611cfde8b56d4e6e1ab41"
 dependencies = [
  "ethera-spec",
  "prost",
@@ -1682,6 +1684,7 @@ dependencies = [
 [[package]]
 name = "ethera-spec-sbcp"
 version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#09bd5699e2fd347e1c4611cfde8b56d4e6e1ab41"
 dependencies = [
  "ethera-spec",
  "sha2",
@@ -1692,6 +1695,7 @@ dependencies = [
 [[package]]
 name = "ethera-spec-scp"
 version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#09bd5699e2fd347e1c4611cfde8b56d4e6e1ab41"
 dependencies = [
  "ethera-spec",
  "thiserror 2.0.18",

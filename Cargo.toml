@@ -106,11 +106,3 @@ semicolon_if_nothing_returned = "warn"
 lto = "thin"
 strip = true
 codegen-units = 1
-
-# Temporary: builds against the local specs checkout until update_chains/accessors/
-# pub rollback land on feat/compose-rs; then remove this section and `cargo update`.
-[patch."https://github.com/ethera-labs/specs.git"]
-ethera-spec = { path = "specs/crates/ethera" }
-ethera-spec-proto = { path = "specs/crates/proto" }
-ethera-spec-sbcp = { path = "specs/crates/sbcp" }
-ethera-spec-scp = { path = "specs/crates/scp" }
