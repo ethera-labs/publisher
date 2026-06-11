@@ -38,7 +38,7 @@ pub async fn dispatch(coordinator: Arc<Coordinator>, client_id: String, data: Ve
                 .await;
         }
         Payload::XtRequest(xt_req) => {
-            coordinator.handle_xt_request(client_id, xt_req).await;
+            coordinator.handle_xt_request(client_id, &xt_req).await;
         }
         Payload::Ping(ping) => {
             coordinator.handle_ping(&client_id, ping.timestamp).await;
@@ -108,9 +108,13 @@ async fn handle_proof(
         compressed_proof: proof.proof_data,
         agg_vkey_hash: Default::default(),
     };
-    coordinator
-        .receive_proof(proof.superblock_number, chain_id.get(), data)
-        .await;
+    // Rejections are logged by the spec with full context.
+    let _ = coordinator.receive_proof(
+        proof.period_id,
+        proof.superblock_number,
+        chain_id.get(),
+        data,
+    );
 }
 
 pub fn parse_chain_id(client_id: &str) -> Result<ChainId, ParseChainIdError> {

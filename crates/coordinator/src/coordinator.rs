@@ -1,19 +1,21 @@
-//! Core coordinator state and public API.
+//! Coordinator wiring the spec SCP/SBCP state machines to QUIC transport,
+//! scheduling, and L1 settlement.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::bridge::{Outbound, OutboundSink};
 use crate::l1_submit::L1Submitter;
 use crate::proof_types::ProofData;
 
 use ethera_spec::{
-    ChainId, Instance, InstanceId, PeriodId, SequenceNumber, SuperblockNumber, XtRequest,
+    ChainId, DecisionState, InstanceId, PeriodId, SuperblockHash, SuperblockNumber, XtRequest,
 };
-use ethera_spec_sbcp::generate_instance_id;
-use prost::Message;
-use tokio::sync::RwLock;
+use ethera_spec_sbcp::{ProofStatus, PublisherError};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use publisher_metrics::PublisherMetrics;
@@ -21,56 +23,17 @@ use publisher_transport::server::QuicServer;
 
 const MAX_PENDING_QUEUE_SIZE: usize = 100;
 
-#[derive(Debug)]
-pub(crate) struct ActiveXt {
-    chains: Vec<ChainId>,
-    votes: HashMap<ChainId, bool>,
-    start_time: Instant,
+type SbcpPublisher =
+    ethera_spec_sbcp::Publisher<OutboundSink, OutboundSink, OutboundSink, OutboundSink>;
+
+#[derive(Debug, Default)]
+struct ChainRegistry {
+    chain_to_client: HashMap<ChainId, String>,
+    client_to_chain: HashMap<String, ChainId>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct PendingEntry {
-    pub xt_request: ethera_spec_proto::XtRequest,
-    pub chains: Vec<ChainId>,
-}
-
-#[derive(Debug)]
-pub(crate) struct CoordinatorState {
-    pub chain_to_client: HashMap<ChainId, String>,
-    pub client_to_chain: HashMap<String, ChainId>,
-    pub active_xts: HashMap<InstanceId, ActiveXt>,
-    pub active_chains: HashMap<ChainId, InstanceId>,
-    pub pending_queue: Vec<PendingEntry>,
-    pub current_period_id: PeriodId,
-    pub next_sequence_num: SequenceNumber,
-    pub next_superblock_number: SuperblockNumber,
-    pub last_finalized_superblock_number: u64,
-    pub last_finalized_superblock_hash: Vec<u8>,
-    /// Latest proof per chain. op-succinct reports chain-local `end_block`,
-    /// while the publisher owns the global superblock number used for settlement.
-    pending_proofs: HashMap<u64, ProofData>,
-    proof_collection_started: Option<Instant>,
-}
-
-impl CoordinatorState {
-    fn new() -> Self {
-        Self {
-            chain_to_client: HashMap::new(),
-            client_to_chain: HashMap::new(),
-            active_xts: HashMap::new(),
-            active_chains: HashMap::new(),
-            pending_queue: Vec::new(),
-            current_period_id: PeriodId(0),
-            next_sequence_num: SequenceNumber(1),
-            next_superblock_number: SuperblockNumber::new(1),
-            last_finalized_superblock_number: 0,
-            last_finalized_superblock_hash: Vec::new(),
-            pending_proofs: HashMap::new(),
-            proof_collection_started: None,
-        }
-    }
-
-    fn register_chain(&mut self, client_id: &str, chain_id: ChainId) {
+impl ChainRegistry {
+    fn register(&mut self, client_id: &str, chain_id: ChainId) {
         if let Some(old_chain) = self.client_to_chain.get(client_id) {
             self.chain_to_client.remove(old_chain);
         }
@@ -78,178 +41,23 @@ impl CoordinatorState {
         self.client_to_chain.insert(client_id.to_string(), chain_id);
     }
 
-    fn has_overlap(&self, chains: &[ChainId]) -> bool {
-        chains.iter().any(|c| self.active_chains.contains_key(c))
-    }
-
-    fn reserve_chains(&mut self, id: InstanceId, chains: &[ChainId]) {
-        for &chain_id in chains {
-            self.active_chains.insert(chain_id, id);
-        }
-    }
-
-    fn release_chains(&mut self, id: InstanceId) {
-        if let Some(xt) = self.active_xts.get(&id) {
-            for chain_id in &xt.chains {
-                if self.active_chains.get(chain_id) == Some(&id) {
-                    self.active_chains.remove(chain_id);
-                }
-            }
-        }
-    }
-
-    fn prepare_xt(
-        &mut self,
-        xt_req: &ethera_spec_proto::XtRequest,
-        chains: &[ChainId],
-    ) -> (InstanceId, Vec<u8>) {
-        let seq_num = self.next_sequence_num;
-        let period_id = self.current_period_id;
-        let compose_req = XtRequest::from(xt_req);
-        let instance = Instance {
-            id: generate_instance_id(period_id, seq_num, &compose_req),
-            period_id,
-            sequence_number: seq_num,
-            xt_request: compose_req,
-        };
-        let id = instance.id;
-        self.next_sequence_num = seq_num + 1;
-
-        self.reserve_chains(id, chains);
-        self.active_xts.insert(
-            id,
-            ActiveXt {
-                chains: chains.to_vec(),
-                votes: HashMap::new(),
-                start_time: Instant::now(),
-            },
-        );
-
-        let msg = ethera_spec_proto::Message {
-            sender_id: "publisher".into(),
-            payload: Some(ethera_spec_proto::Payload::StartInstance(
-                (&instance).into(),
-            )),
-        };
-
-        info!(
-            xt_id = %id,
-            period_id = %period_id,
-            seq_num = %seq_num,
-            chains = chains.len(),
-            "XT prepared"
-        );
-
-        (id, msg.encode_to_vec())
-    }
-
-    fn record_vote(
-        &mut self,
-        id: InstanceId,
-        chain_id: ChainId,
-        vote: bool,
-    ) -> Option<(bool, f64, Vec<u8>)> {
-        let xt = self.active_xts.get_mut(&id)?;
-
-        if !xt.chains.contains(&chain_id) {
-            warn!(xt_id = %id, chain_id = %chain_id, "Ignoring vote from non-participant chain");
-            return None;
-        }
-
-        if xt.votes.contains_key(&chain_id) {
-            warn!(xt_id = %id, chain_id = %chain_id, "Ignoring duplicate vote");
-            return None;
-        }
-
-        xt.votes.insert(chain_id, vote);
-
-        // A single reject decides false immediately; otherwise wait for unanimity.
-        let decision = if !vote {
-            false
-        } else if xt.votes.len() == xt.chains.len() {
-            xt.votes.values().all(|&v| v)
-        } else {
-            return None;
-        };
-        let latency = xt.start_time.elapsed().as_secs_f64();
-
-        self.release_chains(id);
-        self.active_xts.remove(&id);
-
-        let msg = ethera_spec_proto::Message {
-            sender_id: "publisher".into(),
-            payload: Some(ethera_spec_proto::Payload::Decided(
-                ethera_spec_proto::Decided {
-                    instance_id: id.as_bytes().to_vec(),
-                    decision,
-                },
-            )),
-        };
-
-        Some((decision, latency, msg.encode_to_vec()))
-    }
-
-    /// Finds timed-out xTs and produces `Decided(false)` messages for each.
-    fn reap_timed_out(&mut self, timeout: Duration) -> Vec<(InstanceId, Vec<u8>)> {
-        let now = Instant::now();
-        let expired: Vec<InstanceId> = self
-            .active_xts
-            .iter()
-            .filter(|(_, xt)| now.duration_since(xt.start_time) >= timeout)
-            .map(|(id, _)| *id)
-            .collect();
-
-        let mut results = Vec::with_capacity(expired.len());
-        for id in expired {
-            self.release_chains(id);
-            self.active_xts.remove(&id);
-
-            let msg = ethera_spec_proto::Message {
-                sender_id: "publisher".into(),
-                payload: Some(ethera_spec_proto::Payload::Decided(
-                    ethera_spec_proto::Decided {
-                        instance_id: id.as_bytes().to_vec(),
-                        decision: false,
-                    },
-                )),
-            };
-            results.push((id, msg.encode_to_vec()));
-        }
-        results
-    }
-
-    /// Returns true if proof collection has expired and clears collected proofs.
-    fn reap_expired_proofs(&mut self, proof_window: Duration) -> bool {
-        if let Some(started) = self.proof_collection_started {
-            if Instant::now().duration_since(started) >= proof_window {
-                self.pending_proofs.clear();
-                self.proof_collection_started = None;
-                return true;
-            }
-        }
-        false
-    }
-
-    fn take_next_ready(&mut self) -> Option<PendingEntry> {
-        let idx = self
-            .pending_queue
-            .iter()
-            .position(|e| !self.has_overlap(&e.chains))?;
-        Some(self.pending_queue.remove(idx))
-    }
-
-    fn is_chain_registered(&self, chain_id: ChainId) -> bool {
-        self.chain_to_client.contains_key(&chain_id)
+    fn chains(&self) -> HashSet<ChainId> {
+        self.chain_to_client.keys().copied().collect()
     }
 }
 
 pub struct Coordinator {
-    pub(crate) state: Arc<RwLock<CoordinatorState>>,
+    sbcp: SbcpPublisher,
+    xt_started: RwLock<HashMap<InstanceId, Instant>>,
+    registry: RwLock<ChainRegistry>,
+    pending_queue: Mutex<VecDeque<XtRequest>>,
+    outbound_rx: std::sync::Mutex<Option<UnboundedReceiver<Outbound>>>,
     pub(crate) server: Arc<QuicServer>,
     pub(crate) metrics: Option<Arc<PublisherMetrics>>,
-    pub(crate) l1_submitter: Option<Arc<L1Submitter>>,
+    l1_submitter: Option<Arc<L1Submitter>>,
     scp_timeout: Duration,
     proof_window: Duration,
+    proof_timer: std::sync::Mutex<Option<Instant>>,
     messages_processed: AtomicU64,
     broadcasts_sent: AtomicU64,
     start_time: Instant,
@@ -267,18 +75,40 @@ impl Coordinator {
         metrics: Option<Arc<PublisherMetrics>>,
         scp_timeout: Duration,
         proof_window: Duration,
-    ) -> Self {
-        Self {
-            state: Arc::new(RwLock::new(CoordinatorState::new())),
+        proof_window_periods: u64,
+        last_finalized_superblock_number: u64,
+        last_finalized_superblock_hash: [u8; 32],
+    ) -> anyhow::Result<Self> {
+        let (sink, outbound_rx) = OutboundSink::channel();
+        let sbcp = ethera_spec_sbcp::Publisher::new(
+            sink.clone(),
+            sink.clone(),
+            sink.clone(),
+            sink.clone(),
+            PeriodId(0),
+            SuperblockNumber(last_finalized_superblock_number),
+            SuperblockNumber(last_finalized_superblock_number),
+            SuperblockHash(last_finalized_superblock_hash),
+            proof_window_periods,
+            HashSet::new(),
+        )?;
+
+        Ok(Self {
+            sbcp,
+            xt_started: RwLock::new(HashMap::new()),
+            registry: RwLock::new(ChainRegistry::default()),
+            pending_queue: Mutex::new(VecDeque::new()),
+            outbound_rx: std::sync::Mutex::new(Some(outbound_rx)),
             server,
             metrics,
             l1_submitter: None,
             scp_timeout,
             proof_window,
+            proof_timer: std::sync::Mutex::new(None),
             messages_processed: AtomicU64::new(0),
             broadcasts_sent: AtomicU64::new(0),
             start_time: Instant::now(),
-        }
+        })
     }
 
     pub fn with_l1_submitter(mut self, submitter: L1Submitter) -> Self {
@@ -305,112 +135,162 @@ impl Coordinator {
     }
 
     pub async fn register_chain(&self, client_id: &str, chain_id: ChainId) {
-        let mut state = self.state.write().await;
-        state.register_chain(client_id, chain_id);
+        let chains = {
+            let mut registry = self.registry.write().await;
+            registry.register(client_id, chain_id);
+            registry.chains()
+        };
+        self.sbcp.update_chains(chains);
         info!(client_id, chain_id = %chain_id, "Chain registered");
     }
 
-    /// Initializes superblock state from L1 on startup - must be called before
-    /// the period loop starts so `next_superblock_number` and `parent_hash` are
-    /// correct after a restart.
-    pub async fn init_from_l1(&self) {
-        if let Some(submitter) = &self.l1_submitter {
-            match submitter.fetch_latest_superblock_state().await {
-                Ok(Some((sb_num, sb_hash))) => {
-                    let mut state = self.state.write().await;
-                    state.last_finalized_superblock_number = sb_num;
-                    state.last_finalized_superblock_hash = sb_hash.to_vec();
-                    state.next_superblock_number = SuperblockNumber::new(sb_num + 1);
-                    info!(
-                        last_finalized = sb_num,
-                        next = sb_num + 1,
-                        "Initialized superblock state from L1"
-                    );
+    /// Drains the outbound channel produced by the spec state machines and
+    /// performs the actual QUIC broadcasts and L1 submissions.
+    pub async fn run_outbound(self: Arc<Self>) {
+        let rx = self.outbound_rx.lock().unwrap().take();
+        let Some(mut rx) = rx else {
+            error!("Outbound receiver already taken");
+            return;
+        };
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                Outbound::Broadcast(data) => self.broadcast(&data).await,
+                Outbound::Rollback(data) => {
+                    self.abandon_in_flight().await;
+                    self.broadcast(&data).await;
+                    self.drain_queue().await;
                 }
-                Ok(None) => {
-                    info!("No superblocks on L1 yet - starting from genesis");
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to read L1 superblock state - starting from genesis");
-                }
+                Outbound::AggregateProofs {
+                    superblock_number,
+                    proofs,
+                } => self.complete_aggregation(superblock_number, proofs),
+                Outbound::SubmitProof {
+                    superblock_number,
+                    proofs,
+                } => self.spawn_l1_submit(superblock_number, proofs),
             }
         }
     }
 
-    pub async fn advance_period(&self) -> Result<(), publisher_transport::error::TransportError> {
-        let (period_id, superblock_num) = {
-            let mut state = self.state.write().await;
-            let pid = PeriodId(state.current_period_id.get() + 1);
-            state.current_period_id = pid;
-            state.next_sequence_num = SequenceNumber(1);
-            let sb = state.next_superblock_number;
-            (pid, sb)
-        };
-
-        let msg = ethera_spec_proto::Message {
-            sender_id: "publisher".into(),
-            payload: Some(ethera_spec_proto::Payload::StartPeriod(
-                ethera_spec_proto::StartPeriod {
-                    period_id: period_id.get(),
-                    superblock_number: superblock_num.get(),
-                },
-            )),
-        };
-        let data = msg.encode_to_vec();
-
-        info!(period_id = %period_id, superblock_num = %superblock_num, "Broadcasting period");
-        self.inc_broadcasts();
-        if let Some(m) = &self.metrics {
-            m.period_broadcast_total.inc();
+    /// Per-chain proofs are already aggregated by op-succinct, so the
+    /// superblock proof is just their bundle, fed straight back to the spec.
+    /// A real long-running prover would respond from its own task instead.
+    fn complete_aggregation(
+        &self,
+        superblock_number: SuperblockNumber,
+        proofs: HashMap<ChainId, ProofData>,
+    ) {
+        if let Err(e) = self
+            .sbcp
+            .superblock_proof_ready(superblock_number, proofs.into_values().collect())
+        {
+            warn!(
+                superblock_number = superblock_number.get(),
+                error = %e,
+                "Dropping superblock proof"
+            );
         }
-        self.server.broadcast_raw(&data, "").await
+    }
+
+    async fn broadcast(&self, data: &[u8]) {
+        self.inc_broadcasts();
+        if let Err(e) = self.server.broadcast_raw(data, "").await {
+            error!(error = %e, "Failed to broadcast");
+        }
+    }
+
+    /// The spec abandons its in-flight instances on rollback; drop the
+    /// matching start times.
+    async fn abandon_in_flight(&self) {
+        self.xt_started.write().await.clear();
+    }
+
+    fn spawn_l1_submit(
+        self: &Arc<Self>,
+        superblock_number: SuperblockNumber,
+        proofs: Vec<ProofData>,
+    ) {
+        let Some(submitter) = self.l1_submitter.clone() else {
+            warn!(
+                superblock_number = superblock_number.get(),
+                "No L1 submitter configured - dropping superblock proof"
+            );
+            return;
+        };
+
+        let coordinator = Arc::clone(self);
+        tokio::spawn(async move {
+            match submitter.submit(superblock_number.get(), &proofs).await {
+                Ok(superblock_hash) => {
+                    *coordinator.proof_timer.lock().unwrap() = None;
+                    if let Err(e) = coordinator
+                        .sbcp
+                        .advance_settled_state(superblock_number, SuperblockHash(superblock_hash.0))
+                    {
+                        warn!(
+                            superblock_number = superblock_number.get(),
+                            error = %e,
+                            "Failed to advance settled state"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        superblock_number = superblock_number.get(),
+                        error = %e,
+                        "L1 submission failed - rolling back"
+                    );
+                    coordinator.sbcp.rollback();
+                }
+            }
+        });
+    }
+
+    pub fn start_period(&self) {
+        match self.sbcp.start_period() {
+            Ok(()) => {
+                if let Some(m) = &self.metrics {
+                    m.period_broadcast_total.inc();
+                }
+            }
+            Err(e) => warn!(error = %e, "Skipping period start"),
+        }
     }
 
     pub(crate) async fn handle_xt_request(
         &self,
         client_id: String,
-        xt_req: ethera_spec_proto::XtRequest,
+        xt_req: &ethera_spec_proto::XtRequest,
     ) {
-        let chains = extract_chains(&xt_req);
+        let request = XtRequest::from(xt_req);
 
-        if chains.len() < 2 {
-            warn!(
-                client_id,
-                chains = chains.len(),
-                "Rejecting XT: must span at least 2 chains"
-            );
-            return;
-        }
-
-        let broadcast = {
-            let mut state = self.state.write().await;
-
-            if state.has_overlap(&chains) {
-                if state.pending_queue.len() >= MAX_PENDING_QUEUE_SIZE {
-                    warn!(client_id, "XT queue full, rejecting");
-                    return;
+        match self.sbcp.start_instance(request.clone()) {
+            Ok(instance) => self.track_started(instance.id).await,
+            Err(PublisherError::CannotStartInstance) => {
+                {
+                    let mut queue = self.pending_queue.lock().await;
+                    if queue.len() >= MAX_PENDING_QUEUE_SIZE {
+                        warn!(client_id, "XT queue full, rejecting");
+                        return;
+                    }
+                    queue.push_back(request);
                 }
-                state.pending_queue.push(PendingEntry {
-                    xt_request: xt_req,
-                    chains,
-                });
                 if let Some(m) = &self.metrics {
                     m.xt_queued_total.inc();
                 }
-                None
-            } else {
-                Some(state.prepare_xt(&xt_req, &chains))
+                // The blocking instance may have decided between the failed
+                // start and the queue push; retry instead of stranding it.
+                self.drain_queue().await;
             }
-        };
+            Err(e) => warn!(client_id, error = %e, "Rejecting XT"),
+        }
+    }
 
-        if let Some((_xt_id, data)) = broadcast {
-            self.inc_broadcasts();
-            if let Some(m) = &self.metrics {
-                m.xt_started_total.inc();
-            }
-            if let Err(e) = self.server.broadcast_raw(&data, "").await {
-                error!(error = %e, "Failed to broadcast XT start");
-            }
+    async fn track_started(&self, id: InstanceId) {
+        self.xt_started.write().await.insert(id, Instant::now());
+        if let Some(m) = &self.metrics {
+            m.xt_started_total.inc();
         }
     }
 
@@ -432,42 +312,155 @@ impl Coordinator {
         let id = InstanceId::new(id_bytes);
         info!(xt_id = %id, chain_id = %chain_id, vote, "Vote received");
 
-        let result = {
-            let mut state = self.state.write().await;
-            state.record_vote(id, chain_id, vote)
+        match self.sbcp.process_vote(id, chain_id, vote) {
+            Ok(DecisionState::Pending) => {}
+            Ok(decision) => self.record_decision(id, decision).await,
+            Err(PublisherError::UnknownInstance) => {
+                warn!(xt_id = %id, chain_id = %chain_id, "Vote for unknown or finished xT");
+            }
+            // Duplicate / non-participant votes are logged by the spec.
+            Err(_) => {}
+        }
+    }
+
+    async fn record_decision(&self, id: InstanceId, decision: DecisionState) {
+        let started = self.xt_started.write().await.remove(&id);
+        let decision = decision == DecisionState::Accepted;
+        let latency = started.map_or(0.0, |s| s.elapsed().as_secs_f64());
+        info!(
+            xt_id = %id,
+            decision,
+            latency_ms = (latency * 1000.0) as u64,
+            "Decision reached"
+        );
+
+        if let Some(m) = &self.metrics {
+            if decision {
+                m.xt_decided_commit_total.inc();
+            } else {
+                m.xt_decided_abort_total.inc();
+            }
+            m.xt_decision_latency_seconds.observe(latency);
+        }
+
+        self.drain_queue().await;
+    }
+
+    async fn drain_queue(&self) {
+        loop {
+            let launched = {
+                let mut queue = self.pending_queue.lock().await;
+                let mut launched = None;
+                let mut idx = 0;
+                while idx < queue.len() {
+                    match self.sbcp.start_instance(queue[idx].clone()) {
+                        Ok(instance) => {
+                            queue.remove(idx);
+                            launched = Some(instance);
+                            break;
+                        }
+                        Err(PublisherError::CannotStartInstance) => idx += 1,
+                        Err(e) => {
+                            warn!(error = %e, "Dropping queued XT");
+                            queue.remove(idx);
+                        }
+                    }
+                }
+                launched
+            };
+
+            match launched {
+                Some(instance) => self.track_started(instance.id).await,
+                None => return,
+            }
+        }
+    }
+
+    pub async fn reap_timed_out_xts(&self) {
+        let now = Instant::now();
+        let expired: Vec<InstanceId> = {
+            let xt_started = self.xt_started.read().await;
+            xt_started
+                .iter()
+                .filter(|(_, started)| now.duration_since(**started) >= self.scp_timeout)
+                .map(|(id, _)| *id)
+                .collect()
         };
 
-        if let Some((decision, latency, data)) = result {
-            info!(
-                xt_id = %id,
-                decision,
-                latency_ms = (latency * 1000.0) as u64,
-                "Decision reached"
-            );
-            if let Some(m) = &self.metrics {
-                if decision {
-                    m.xt_decided_commit_total.inc();
-                } else {
-                    m.xt_decided_abort_total.inc();
+        for id in expired {
+            warn!(xt_id = %id, "SCP timeout - deciding false");
+            match self.sbcp.timeout_instance(id) {
+                Ok(()) => self.record_decision(id, DecisionState::Rejected).await,
+                Err(e) => {
+                    warn!(xt_id = %id, error = %e, "Failed to time out xT");
+                    self.xt_started.write().await.remove(&id);
                 }
-                m.xt_decision_latency_seconds.observe(latency);
             }
-
-            self.inc_broadcasts();
-            if let Err(e) = self.server.broadcast_raw(&data, "").await {
-                error!(xt_id = %id, error = %e, "Failed to broadcast decision");
-            }
-
-            self.drain_queue().await;
         }
+    }
+
+    /// Drives the spec's proof-timeout: the timer arms once a terminated
+    /// superblock awaits proofs (settlement pipeline started) and triggers a
+    /// rollback when `proof_window` elapses without settlement.
+    pub fn reap_expired_proofs(&self) {
+        let settling = self.sbcp.settling_superblock().is_some();
+
+        let mut timer = self.proof_timer.lock().unwrap();
+        if !settling {
+            *timer = None;
+            return;
+        }
+
+        match *timer {
+            None => *timer = Some(Instant::now()),
+            Some(started) if started.elapsed() >= self.proof_window => {
+                *timer = None;
+                drop(timer);
+                warn!("Proof window expired - triggering rollback");
+                self.sbcp.proof_timeout();
+            }
+            Some(_) => {}
+        }
+    }
+
+    pub fn receive_proof(
+        &self,
+        period_id: u64,
+        superblock_number: u64,
+        chain_id: u64,
+        data: ProofData,
+    ) -> Result<ProofStatus, PublisherError> {
+        self.sbcp.receive_proof(
+            PeriodId(period_id),
+            SuperblockNumber(superblock_number),
+            data,
+            ChainId(chain_id),
+        )
+    }
+
+    /// Ingests an op-succinct proof, which reports chain-local block heights
+    /// and knows nothing about SBCP numbering: the proof is mapped onto the
+    /// superblock currently awaiting settlement.
+    pub fn receive_chain_proof(
+        &self,
+        chain_id: u64,
+        data: ProofData,
+    ) -> Result<ProofStatus, PublisherError> {
+        let Some(superblock) = self.sbcp.settling_superblock() else {
+            return Err(PublisherError::ProofForNonTerminatedSuperblock);
+        };
+
+        let target = self.sbcp.target_superblock_number();
+        let period = self.sbcp.period_id() - (target - superblock).get();
+        self.receive_proof(period.get(), superblock.get(), chain_id, data)
     }
 
     pub(crate) async fn handle_mailbox_relay(&self, mailbox: &ethera_spec_proto::MailboxMessage) {
         let dest_chain = ChainId::new(mailbox.destination_chain);
 
         let client_id = {
-            let state = self.state.read().await;
-            state.chain_to_client.get(&dest_chain).cloned()
+            let registry = self.registry.read().await;
+            registry.chain_to_client.get(&dest_chain).cloned()
         };
 
         let Some(client_id) = client_id else {
@@ -475,11 +468,9 @@ impl Coordinator {
             return;
         };
 
-        let msg = ethera_spec_proto::Message {
-            sender_id: "publisher".into(),
-            payload: Some(ethera_spec_proto::Payload::MailboxMessage(mailbox.clone())),
-        };
-        let data = msg.encode_to_vec();
+        let data = crate::bridge::encode_message(ethera_spec_proto::Payload::MailboxMessage(
+            mailbox.clone(),
+        ));
         self.inc_broadcasts();
 
         if let Err(e) = self.server.send_raw(&client_id, &data).await {
@@ -488,194 +479,46 @@ impl Coordinator {
     }
 
     pub(crate) async fn handle_ping(&self, client_id: &str, timestamp: i64) {
-        let msg = ethera_spec_proto::Message {
-            sender_id: "publisher".into(),
-            payload: Some(ethera_spec_proto::Payload::Pong(ethera_spec_proto::Pong {
-                timestamp,
-            })),
-        };
-        let data = msg.encode_to_vec();
+        let data = crate::bridge::encode_message(ethera_spec_proto::Payload::Pong(
+            ethera_spec_proto::Pong { timestamp },
+        ));
         if let Err(e) = self.server.send_raw(client_id, &data).await {
             warn!(client_id, error = %e, "Failed to send pong");
         }
     }
 
-    async fn drain_queue(&self) {
-        loop {
-            let broadcast = {
-                let mut state = self.state.write().await;
-                let Some(entry) = state.take_next_ready() else {
-                    return;
-                };
-                Some(state.prepare_xt(&entry.xt_request, &entry.chains))
-            };
-
-            if let Some((_xt_id, data)) = broadcast {
-                self.inc_broadcasts();
-                if let Some(m) = &self.metrics {
-                    m.xt_started_total.inc();
-                }
-                if let Err(e) = self.server.broadcast_raw(&data, "").await {
-                    error!(error = %e, "Failed to broadcast queued XT");
-                }
-            }
-        }
-    }
-
-    pub async fn reap_timed_out_xts(&self) {
-        let timed_out = {
-            let mut state = self.state.write().await;
-            state.reap_timed_out(self.scp_timeout)
-        };
-
-        for (id, data) in &timed_out {
-            warn!(xt_id = %id, "SCP timeout - deciding false");
-            if let Some(m) = &self.metrics {
-                m.xt_decided_abort_total.inc();
-            }
-            self.inc_broadcasts();
-            if let Err(e) = self.server.broadcast_raw(data, "").await {
-                error!(xt_id = %id, error = %e, "Failed to broadcast timeout decision");
-            }
-        }
-
-        if !timed_out.is_empty() {
-            self.drain_queue().await;
-        }
-    }
-
-    pub async fn reap_expired_proofs(&self) {
-        let expired = {
-            let mut state = self.state.write().await;
-            state.reap_expired_proofs(self.proof_window)
-        };
-
-        if expired {
-            warn!("Proof window expired - triggering rollback");
-
-            let (period_id, last_sb_num, last_sb_hash) = {
-                let mut state = self.state.write().await;
-                state.next_superblock_number =
-                    SuperblockNumber::new(state.last_finalized_superblock_number + 1);
-                (
-                    state.current_period_id.get(),
-                    state.last_finalized_superblock_number,
-                    state.last_finalized_superblock_hash.clone(),
-                )
-            };
-
-            let msg = ethera_spec_proto::Message {
-                sender_id: "publisher".into(),
-                payload: Some(ethera_spec_proto::Payload::Rollback(
-                    ethera_spec_proto::Rollback {
-                        period_id,
-                        last_finalized_superblock_number: last_sb_num,
-                        last_finalized_superblock_hash: last_sb_hash,
-                    },
-                )),
-            };
-            let data = msg.encode_to_vec();
-
-            info!(period_id, last_sb_num, "Broadcasting rollback");
-            self.inc_broadcasts();
-            if let Err(e) = self.server.broadcast_raw(&data, "").await {
-                error!(error = %e, "Failed to broadcast rollback");
-            }
-        }
-    }
-
     pub async fn is_chain_registered(&self, chain_id: ChainId) -> bool {
-        let state = self.state.read().await;
-        state.is_chain_registered(chain_id)
+        let registry = self.registry.read().await;
+        registry.chain_to_client.contains_key(&chain_id)
     }
 
     pub async fn chain_for_client(&self, client_id: &str) -> Option<ChainId> {
-        let state = self.state.read().await;
-        state.client_to_chain.get(client_id).copied()
+        let registry = self.registry.read().await;
+        registry.client_to_chain.get(client_id).copied()
     }
 
-    pub async fn current_superblock_number(&self) -> u64 {
-        let state = self.state.read().await;
-        state.next_superblock_number.get()
-    }
-
-    /// Collects the latest proof from each chain and submits once all chains report.
-    /// The incoming `superblock_number` is chain-local provenance; settlement uses
-    /// the publisher's current global superblock number.
-    pub async fn receive_proof(&self, superblock_number: u64, chain_id: u64, data: ProofData) {
-        let (collected, total, ready_proofs, submit_sb_number) = {
-            let mut state = self.state.write().await;
-            let total = state.chain_to_client.len();
-
-            if state.pending_proofs.contains_key(&chain_id) {
-                warn!(
-                    chain_id,
-                    superblock_number, "Replacing existing proof for chain"
-                );
-            }
-
-            if state.proof_collection_started.is_none() {
-                state.proof_collection_started = Some(Instant::now());
-            }
-
-            state.pending_proofs.insert(chain_id, data);
-            let collected = state.pending_proofs.len();
-
-            if total > 0 && collected >= total {
-                let proofs: HashMap<u64, ProofData> = state.pending_proofs.drain().collect();
-                let sb = state.next_superblock_number.get();
-                state.proof_collection_started = None;
-                (collected, total, Some(proofs), sb)
-            } else {
-                (collected, total, None, 0)
-            }
-        };
-
-        if let Some(proofs) = ready_proofs {
-            info!(
-                superblock_number = submit_sb_number,
-                collected, "All chains submitted proofs"
-            );
-
-            if let Some(submitter) = self.l1_submitter.clone() {
-                let state = self.state.clone();
-                tokio::spawn(async move {
-                    match submitter.submit(submit_sb_number, &proofs).await {
-                        Ok(()) => {
-                            let mut s = state.write().await;
-                            s.last_finalized_superblock_number = submit_sb_number;
-                            s.next_superblock_number = SuperblockNumber::new(submit_sb_number + 1);
-                            info!(
-                                superblock_number = submit_sb_number,
-                                "L1 submission succeeded, advancing state"
-                            );
-                        }
-                        Err(e) => {
-                            warn!(superblock_number = submit_sb_number, error = %e, "L1 submission failed");
-                        }
-                    }
-                });
-            }
-        } else {
-            info!(
-                superblock_number,
-                chain_id, collected, total, "Proof received"
-            );
-        }
+    #[cfg(test)]
+    fn take_outbound_rx(&self) -> UnboundedReceiver<Outbound> {
+        self.outbound_rx.lock().unwrap().take().unwrap()
     }
 
     pub async fn stats(&self) -> serde_json::Value {
-        let state = self.state.read().await;
+        let pending_proofs = self
+            .sbcp
+            .settling_superblock()
+            .and_then(|sb| self.sbcp.proof_chains_for(sb))
+            .map_or(0, |chains| chains.len());
+
         serde_json::json!({
             "active_connections": self.server.connection_count().await,
-            "registered_chains": state.chain_to_client.len(),
-            "active_2pc_transactions": state.active_xts.len(),
-            "active_chains": state.active_chains.len(),
-            "queued_xts": state.pending_queue.len(),
-            "pending_proof_superblocks": state.pending_proofs.len(),
-            "current_period_id": state.current_period_id.get(),
-            "next_superblock_number": state.next_superblock_number.get(),
-            "last_finalized_superblock": state.last_finalized_superblock_number,
+            "registered_chains": self.registry.read().await.chain_to_client.len(),
+            "active_2pc_transactions": self.sbcp.active_instance_count(),
+            "active_chains": self.sbcp.active_chain_count(),
+            "queued_xts": self.pending_queue.lock().await.len(),
+            "pending_proof_superblocks": pending_proofs,
+            "current_period_id": self.sbcp.period_id().get(),
+            "next_superblock_number": self.sbcp.target_superblock_number().get(),
+            "last_finalized_superblock": self.sbcp.last_finalized_superblock_number().get(),
             "messages_processed": self.messages_processed.load(Ordering::Relaxed),
             "broadcasts_sent": self.broadcasts_sent.load(Ordering::Relaxed),
             "uptime_seconds": self.start_time.elapsed().as_secs_f64(),
@@ -683,22 +526,11 @@ impl Coordinator {
     }
 }
 
-/// Returns the unique participating chains in first-seen order.
-///
-/// Reads chain ids straight from the wire request; converting to the domain
-/// `XtRequest` first would clone every transaction payload.
-fn extract_chains(req: &ethera_spec_proto::XtRequest) -> Vec<ChainId> {
-    let mut seen = HashSet::new();
-    req.transaction_requests
-        .iter()
-        .map(|tr| ChainId::new(tr.chain_id))
-        .filter(|&c| seen.insert(c))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prost::Message as _;
+    use tokio::sync::mpsc::error::TryRecvError;
 
     fn proto_xt(chain_ids: &[u64]) -> ethera_spec_proto::XtRequest {
         ethera_spec_proto::XtRequest {
@@ -712,45 +544,218 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unanimous_yes_commits_and_releases_chains() {
-        let mut state = CoordinatorState::new();
-        let chains = vec![ChainId::new(1), ChainId::new(2)];
-        let (id, _) = state.prepare_xt(&proto_xt(&[1, 2]), &chains);
-
-        assert!(state.record_vote(id, ChainId::new(1), true).is_none());
-        let (decision, _, _) = state.record_vote(id, ChainId::new(2), true).unwrap();
-        assert!(decision);
-        assert!(!state.active_xts.contains_key(&id));
-        assert!(
-            state.active_chains.is_empty(),
-            "chains released on decision"
-        );
+    fn test_coordinator(
+        scp_timeout: Duration,
+        proof_window: Duration,
+    ) -> (Coordinator, UnboundedReceiver<Outbound>) {
+        let server = Arc::new(QuicServer::new("127.0.0.1:0".into(), 4 * 1024 * 1024));
+        let coordinator =
+            Coordinator::new(server, None, scp_timeout, proof_window, 0, 0, [0; 32]).unwrap();
+        let rx = coordinator.take_outbound_rx();
+        (coordinator, rx)
     }
 
-    #[test]
-    fn any_no_aborts_immediately() {
-        let mut state = CoordinatorState::new();
-        let chains = vec![ChainId::new(1), ChainId::new(2), ChainId::new(3)];
-        let (id, _) = state.prepare_xt(&proto_xt(&[1, 2, 3]), &chains);
-
-        // One reject decides false without waiting for the remaining votes.
-        let (decision, _, _) = state.record_vote(id, ChainId::new(2), false).unwrap();
-        assert!(!decision);
-        assert!(!state.active_xts.contains_key(&id));
+    fn decode_payload(event: Outbound) -> ethera_spec_proto::Payload {
+        let data = match event {
+            Outbound::Broadcast(data) | Outbound::Rollback(data) => data,
+            other => panic!("expected broadcast, got {other:?}"),
+        };
+        ethera_spec_proto::Message::decode(data.as_slice())
+            .unwrap()
+            .payload
+            .unwrap()
     }
 
-    #[test]
-    fn ignores_non_participant_and_duplicate_votes() {
-        let mut state = CoordinatorState::new();
-        let chains = vec![ChainId::new(1), ChainId::new(2)];
-        let (id, _) = state.prepare_xt(&proto_xt(&[1, 2]), &chains);
+    fn recv_start_instance(rx: &mut UnboundedReceiver<Outbound>) -> Vec<u8> {
+        match decode_payload(rx.try_recv().unwrap()) {
+            ethera_spec_proto::Payload::StartInstance(si) => si.instance_id,
+            other => panic!("expected StartInstance, got {other:?}"),
+        }
+    }
 
-        assert!(state.record_vote(id, ChainId::new(99), true).is_none());
-        assert!(state.record_vote(id, ChainId::new(1), true).is_none());
-        // Duplicate vote from chain 1 must not count toward the quorum.
-        assert!(state.record_vote(id, ChainId::new(1), true).is_none());
-        let (decision, _, _) = state.record_vote(id, ChainId::new(2), true).unwrap();
-        assert!(decision);
+    fn recv_decided(rx: &mut UnboundedReceiver<Outbound>) -> ethera_spec_proto::Decided {
+        match decode_payload(rx.try_recv().unwrap()) {
+            ethera_spec_proto::Payload::Decided(d) => d,
+            other => panic!("expected Decided, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn unanimous_yes_commits_and_releases_chains() {
+        let (c, mut rx) = test_coordinator(Duration::from_secs(60), Duration::from_secs(7200));
+        c.handle_xt_request("client".into(), &proto_xt(&[1, 2]))
+            .await;
+        let id = recv_start_instance(&mut rx);
+
+        c.handle_vote("client", &id, ChainId::new(1), true).await;
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+
+        c.handle_vote("client", &id, ChainId::new(2), true).await;
+        let decided = recv_decided(&mut rx);
+        assert!(decided.decision);
+        assert_eq!(decided.instance_id, id);
+        assert_eq!(c.sbcp.active_instance_count(), 0);
+
+        // Chains released: the same chains start immediately instead of queueing.
+        c.handle_xt_request("client".into(), &proto_xt(&[1, 2]))
+            .await;
+        recv_start_instance(&mut rx);
+        assert!(c.pending_queue.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn any_no_aborts_immediately() {
+        let (c, mut rx) = test_coordinator(Duration::from_secs(60), Duration::from_secs(7200));
+        c.handle_xt_request("client".into(), &proto_xt(&[1, 2, 3]))
+            .await;
+        let id = recv_start_instance(&mut rx);
+
+        c.handle_vote("client", &id, ChainId::new(2), false).await;
+        let decided = recv_decided(&mut rx);
+        assert!(!decided.decision);
+        assert_eq!(c.sbcp.active_instance_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn ignores_non_participant_and_duplicate_votes() {
+        let (c, mut rx) = test_coordinator(Duration::from_secs(60), Duration::from_secs(7200));
+        c.handle_xt_request("client".into(), &proto_xt(&[1, 2]))
+            .await;
+        let id = recv_start_instance(&mut rx);
+
+        c.handle_vote("client", &id, ChainId::new(99), true).await;
+        c.handle_vote("client", &id, ChainId::new(1), true).await;
+        c.handle_vote("client", &id, ChainId::new(1), true).await;
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+
+        c.handle_vote("client", &id, ChainId::new(2), true).await;
+        assert!(recv_decided(&mut rx).decision);
+    }
+
+    #[tokio::test]
+    async fn overlapping_xt_queues_then_drains_after_decision() {
+        let (c, mut rx) = test_coordinator(Duration::from_secs(60), Duration::from_secs(7200));
+        c.handle_xt_request("client".into(), &proto_xt(&[1, 2]))
+            .await;
+        let id = recv_start_instance(&mut rx);
+
+        c.handle_xt_request("client".into(), &proto_xt(&[2, 3]))
+            .await;
+        assert_eq!(c.pending_queue.lock().await.len(), 1);
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+
+        c.handle_vote("client", &id, ChainId::new(1), true).await;
+        c.handle_vote("client", &id, ChainId::new(2), true).await;
+        assert!(recv_decided(&mut rx).decision);
+
+        // Queue drained: the second xT starts.
+        recv_start_instance(&mut rx);
+        assert!(c.pending_queue.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn single_chain_xt_rejected() {
+        let (c, mut rx) = test_coordinator(Duration::from_secs(60), Duration::from_secs(7200));
+        c.handle_xt_request("client".into(), &proto_xt(&[1])).await;
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(c.sbcp.active_instance_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn timed_out_xt_decides_false_and_releases() {
+        let (c, mut rx) = test_coordinator(Duration::ZERO, Duration::from_secs(7200));
+        c.handle_xt_request("client".into(), &proto_xt(&[1, 2]))
+            .await;
+        recv_start_instance(&mut rx);
+
+        c.reap_timed_out_xts().await;
+        assert!(!recv_decided(&mut rx).decision);
+        assert_eq!(c.sbcp.active_instance_count(), 0);
+
+        c.handle_xt_request("client".into(), &proto_xt(&[1, 2]))
+            .await;
+        recv_start_instance(&mut rx);
+    }
+
+    #[tokio::test]
+    async fn proofs_from_all_chains_trigger_l1_submission() {
+        let (c, mut rx) = test_coordinator(Duration::from_secs(60), Duration::from_secs(7200));
+        c.register_chain("1-sidecar", ChainId::new(1)).await;
+        c.register_chain("2-sidecar", ChainId::new(2)).await;
+
+        // No terminated superblock yet.
+        assert!(c.receive_chain_proof(1, ProofData::default()).is_err());
+
+        c.start_period();
+        c.start_period();
+        recv_start_period(&mut rx);
+        recv_start_period(&mut rx);
+
+        c.receive_chain_proof(1, ProofData::default()).unwrap();
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+
+        c.receive_chain_proof(2, ProofData::default()).unwrap();
+        let (superblock, chain_proofs) = match rx.try_recv().unwrap() {
+            Outbound::AggregateProofs {
+                superblock_number,
+                proofs,
+            } => {
+                assert_eq!(superblock_number, SuperblockNumber(1));
+                assert_eq!(proofs.len(), 2);
+                (superblock_number, proofs)
+            }
+            other => panic!("expected AggregateProofs, got {other:?}"),
+        };
+
+        // Identity aggregation feeds the bundle back and publishes to L1.
+        c.complete_aggregation(superblock, chain_proofs);
+        match rx.try_recv().unwrap() {
+            Outbound::SubmitProof {
+                superblock_number,
+                proofs,
+            } => {
+                assert_eq!(superblock_number, SuperblockNumber(1));
+                assert_eq!(proofs.len(), 2);
+            }
+            other => panic!("expected SubmitProof, got {other:?}"),
+        }
+    }
+
+    fn recv_start_period(rx: &mut UnboundedReceiver<Outbound>) -> (u64, u64) {
+        match decode_payload(rx.try_recv().unwrap()) {
+            ethera_spec_proto::Payload::StartPeriod(sp) => (sp.period_id, sp.superblock_number),
+            other => panic!("expected StartPeriod, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_proof_window_triggers_rollback() {
+        let (c, mut rx) = test_coordinator(Duration::from_secs(60), Duration::ZERO);
+        c.start_period();
+        c.start_period();
+        recv_start_period(&mut rx);
+        recv_start_period(&mut rx);
+
+        // First tick arms the timer, second tick fires it.
+        c.reap_expired_proofs();
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+        c.reap_expired_proofs();
+
+        match decode_payload(rx.try_recv().unwrap()) {
+            ethera_spec_proto::Payload::Rollback(rb) => {
+                assert_eq!(rb.last_finalized_superblock_number, 0);
+            }
+            other => panic!("expected Rollback, got {other:?}"),
+        }
+        assert_eq!(c.sbcp.target_superblock_number(), SuperblockNumber(1));
+    }
+
+    #[tokio::test]
+    async fn period_start_advances_target_superblock() {
+        let (c, mut rx) = test_coordinator(Duration::from_secs(60), Duration::from_secs(7200));
+        c.start_period();
+        assert_eq!(recv_start_period(&mut rx), (1, 1));
+        c.start_period();
+        assert_eq!(recv_start_period(&mut rx), (2, 2));
     }
 }

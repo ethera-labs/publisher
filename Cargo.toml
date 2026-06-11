@@ -28,6 +28,7 @@ publisher-server = { path = "crates/server" }
 ethera-spec = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec" }
 ethera-spec-proto = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec-proto" }
 ethera-spec-sbcp = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec-sbcp" }
+ethera-spec-scp = { git = "https://github.com/ethera-labs/specs.git", branch = "feat/compose-rs", package = "ethera-spec-scp" }
 
 # Async
 tokio = { version = "1.43", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

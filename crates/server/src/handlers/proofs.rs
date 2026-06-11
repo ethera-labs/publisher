@@ -79,10 +79,15 @@ pub async fn handle_submit_proof(
         agg_vkey_hash: body.agg_vkey_hash,
     };
 
-    state
-        .coordinator
-        .receive_proof(body.superblock_number, body.chain_id, data)
-        .await;
-
-    StatusCode::ACCEPTED
+    match state.coordinator.receive_chain_proof(body.chain_id, data) {
+        Ok(_) => StatusCode::ACCEPTED,
+        Err(e) => {
+            warn!(
+                chain_id = body.chain_id,
+                superblock_number = body.superblock_number,
+                "Proof rejected: {e}"
+            );
+            StatusCode::CONFLICT
+        }
+    }
 }

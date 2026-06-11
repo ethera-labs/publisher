@@ -63,8 +63,13 @@ pub struct ConsensusConfig {
     pub timeout: Duration,
     #[serde(with = "humantime_serde")]
     pub period_duration: Duration,
+    /// Proof-timeout timer: how long to wait for proofs of a terminated
+    /// superblock before rolling back.
     #[serde(with = "humantime_serde")]
     pub proof_window: Duration,
+    /// Period-count backpressure: how many unfinalized superblocks may be in
+    /// flight before `start_period` refuses to advance. 0 disables the limit.
+    pub proof_window_periods: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -104,6 +109,7 @@ impl Default for ConsensusConfig {
             timeout: Duration::from_secs(60),
             period_duration: ethera_spec::PERIOD_DURATION,
             proof_window: Duration::from_secs(7200),
+            proof_window_periods: ethera_spec::PROOF_WINDOW,
         }
     }
 }
@@ -148,10 +154,10 @@ impl Config {
     }
 
     fn apply_env_overrides(&mut self) {
-        env_str("SERVER_LISTEN_ADDR", &mut self.server.listen_addr);
-        env_usize("SERVER_MAX_MESSAGE_SIZE", &mut self.server.max_message_size);
+        env_parse("SERVER_LISTEN_ADDR", &mut self.server.listen_addr);
+        env_parse("SERVER_MAX_MESSAGE_SIZE", &mut self.server.max_message_size);
 
-        env_str("API_LISTEN_ADDR", &mut self.api.listen_addr);
+        env_parse("API_LISTEN_ADDR", &mut self.api.listen_addr);
         env_duration("API_REQUEST_TIMEOUT", &mut self.api.request_timeout);
 
         env_duration("CONSENSUS_TIMEOUT", &mut self.consensus.timeout);
@@ -160,15 +166,19 @@ impl Config {
             &mut self.consensus.period_duration,
         );
         env_duration("CONSENSUS_PROOF_WINDOW", &mut self.consensus.proof_window);
+        env_parse(
+            "CONSENSUS_PROOF_WINDOW_PERIODS",
+            &mut self.consensus.proof_window_periods,
+        );
 
         env_bool("METRICS_ENABLED", &mut self.metrics.enabled);
 
-        env_str("LOG_LEVEL", &mut self.log.level);
+        env_parse("LOG_LEVEL", &mut self.log.level);
         env_bool("LOG_PRETTY", &mut self.log.pretty);
 
-        env_str("SETTLEMENT_L1_RPC_URL", &mut self.settlement.l1_rpc_url);
-        env_str("SETTLEMENT_L2OO_ADDRESS", &mut self.settlement.l2oo_address);
-        env_str("SETTLEMENT_PROPOSER_KEY", &mut self.settlement.proposer_key);
+        env_parse("SETTLEMENT_L1_RPC_URL", &mut self.settlement.l1_rpc_url);
+        env_parse("SETTLEMENT_L2OO_ADDRESS", &mut self.settlement.l2oo_address);
+        env_parse("SETTLEMENT_PROPOSER_KEY", &mut self.settlement.proposer_key);
         env_bool("SETTLEMENT_MOCK", &mut self.settlement.mock);
     }
 
@@ -199,9 +209,11 @@ fn normalize_addr(addr: &mut String) {
     }
 }
 
-fn env_str(key: &str, target: &mut String) {
+fn env_parse<T: std::str::FromStr>(key: &str, target: &mut T) {
     if let Ok(val) = std::env::var(key) {
-        *target = val;
+        if let Ok(parsed) = val.parse() {
+            *target = parsed;
+        }
     }
 }
 
@@ -223,14 +235,6 @@ fn env_duration(key: &str, target: &mut Duration) {
     }
 }
 
-fn env_usize(key: &str, target: &mut usize) {
-    if let Ok(val) = std::env::var(key) {
-        if let Ok(n) = val.parse() {
-            *target = n;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +249,10 @@ mod tests {
         assert_eq!(cfg.consensus.timeout, Duration::from_secs(60));
         assert_eq!(cfg.consensus.period_duration, Duration::from_secs(3840));
         assert_eq!(cfg.consensus.proof_window, Duration::from_secs(7200));
+        assert_eq!(
+            cfg.consensus.proof_window_periods,
+            ethera_spec::PROOF_WINDOW
+        );
         assert!(cfg.metrics.enabled);
         assert_eq!(cfg.log.level, "info");
         assert!(!cfg.log.pretty);
@@ -277,7 +285,7 @@ log:
     fn env_override_string() {
         let mut val = "old".to_string();
         std::env::set_var("TEST_CFG_STR", "new");
-        env_str("TEST_CFG_STR", &mut val);
+        env_parse("TEST_CFG_STR", &mut val);
         assert_eq!(val, "new");
         std::env::remove_var("TEST_CFG_STR");
     }

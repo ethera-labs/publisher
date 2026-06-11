@@ -446,7 +446,7 @@ dependencies = [
  "alloy-rlp",
  "alloy-serde",
  "alloy-sol-types",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "serde",
  "serde_json",
  "serde_with",
@@ -599,7 +599,7 @@ checksum = "e8597d36d546e1dab822345ad563243ec3920e199322cb554ce56c8ef1a1e2e7"
 dependencies = [
  "alloy-json-rpc",
  "alloy-transport",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "reqwest",
  "serde_json",
  "tower",
@@ -1670,12 +1670,12 @@ dependencies = [
 [[package]]
 name = "ethera-spec"
 version = "0.1.0"
-source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#7823c6caf0cc6b122ca968fbfe1461f4f334f2e7"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#36e5294a3124eb792be93feb67942a14d54a8a8e"
 
 [[package]]
 name = "ethera-spec-proto"
 version = "0.1.0"
-source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#7823c6caf0cc6b122ca968fbfe1461f4f334f2e7"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#36e5294a3124eb792be93feb67942a14d54a8a8e"
 dependencies = [
  "ethera-spec",
  "prost",
@@ -1684,10 +1684,21 @@ dependencies = [
 [[package]]
 name = "ethera-spec-sbcp"
 version = "0.1.0"
-source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#7823c6caf0cc6b122ca968fbfe1461f4f334f2e7"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#36e5294a3124eb792be93feb67942a14d54a8a8e"
 dependencies = [
  "ethera-spec",
+ "ethera-spec-scp",
  "sha2",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "ethera-spec-scp"
+version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#36e5294a3124eb792be93feb67942a14d54a8a8e"
+dependencies = [
+ "ethera-spec",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -2341,15 +2352,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2929,7 +2931,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -2977,6 +2979,7 @@ dependencies = [
  "ethera-spec",
  "ethera-spec-proto",
  "ethera-spec-sbcp",
+ "ethera-spec-scp",
  "prost",
  "publisher-metrics",
  "publisher-transport",
