@@ -33,6 +33,10 @@ struct IncomingAggregationOutputs {
     prover_address: Address,
 }
 
+// TODO: Decide whether op-succinct metadata such as superblock_hash,
+// l2_start_block, and mailbox_info should become part of the publisher API.
+// For now the handler tolerates those extra top-level fields for client
+// compatibility, but only validates and consumes aggregation_outputs.
 #[derive(Debug, Deserialize)]
 pub struct ProofSubmission {
     superblock_number: u64,
