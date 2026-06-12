@@ -83,7 +83,7 @@ impl L1Submitter {
     }
 
     /// Reads the latest superblock number and its hash from the L1 contract.
-    /// Returns `None` if the contract has no superblocks yet (number == 0).
+    /// Returns `None` only if the contract has no hash seeded for that number.
     pub async fn fetch_latest_superblock_state(&self) -> Result<Option<(u64, B256)>> {
         let provider = self.build_provider()?;
         let contract = IComposeL2OutputOracle::new(self.l2oo_address, provider);
@@ -95,19 +95,27 @@ impl L1Submitter {
             .context("latestSuperblockNumber call failed")?;
         let sb_num: u64 = result.try_into().unwrap_or(0);
 
-        if sb_num == 0 {
-            return Ok(None);
-        }
-
         let sb_hash = contract
             .getSuperblockHash(U256::from(sb_num))
             .call()
             .await
             .context("getSuperblockHash call failed")?;
 
-        *self.parent_hash.lock().unwrap() = sb_hash;
+        let Some(state) = Self::validate_latest_superblock_state(sb_num, sb_hash) else {
+            return Ok(None);
+        };
 
-        Ok(Some((sb_num, sb_hash)))
+        *self.parent_hash.lock().unwrap() = state.1;
+
+        Ok(Some(state))
+    }
+
+    fn validate_latest_superblock_state(sb_num: u64, sb_hash: B256) -> Option<(u64, B256)> {
+        if sb_hash == B256::ZERO {
+            return None;
+        }
+
+        Some((sb_num, sb_hash))
     }
 
     pub async fn submit(
@@ -213,4 +221,32 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(data);
     h.finalize().into()
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::B256;
+
+    use super::L1Submitter;
+
+    #[test]
+    fn latest_superblock_state_accepts_seeded_genesis_hash() {
+        let genesis_hash: B256 =
+            "0xe7bac8efb0b12db59bbbe8667e31c486d1b6a9cc885edec48b834d943f3e2a46"
+                .parse()
+                .unwrap();
+
+        assert_eq!(
+            L1Submitter::validate_latest_superblock_state(0, genesis_hash),
+            Some((0, genesis_hash))
+        );
+    }
+
+    #[test]
+    fn latest_superblock_state_rejects_empty_hash() {
+        assert_eq!(
+            L1Submitter::validate_latest_superblock_state(0, B256::ZERO),
+            None
+        );
+    }
 }
