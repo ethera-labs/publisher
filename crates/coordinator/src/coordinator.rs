@@ -328,7 +328,7 @@ impl Coordinator {
                     );
                 }
                 Ok(None) => {
-                    info!("No superblocks on L1 yet - starting from genesis");
+                    info!("No seeded superblock hash on L1 yet - starting from genesis");
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to read L1 superblock state - starting from genesis");
