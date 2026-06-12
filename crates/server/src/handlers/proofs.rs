@@ -33,8 +33,11 @@ struct IncomingAggregationOutputs {
     prover_address: Address,
 }
 
+// TODO: Decide whether op-succinct metadata such as superblock_hash,
+// l2_start_block, and mailbox_info should become part of the publisher API.
+// For now the handler tolerates those extra top-level fields for client
+// compatibility, but only validates and consumes aggregation_outputs.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ProofSubmission {
     superblock_number: u64,
     chain_id: u64,
@@ -85,4 +88,69 @@ pub async fn handle_submit_proof(
         .await;
 
     StatusCode::ACCEPTED
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ProofSubmission;
+
+    const B256_HEX: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
+    const ADDRESS_HEX: &str = "0x2222222222222222222222222222222222222222";
+
+    fn valid_aggregation_outputs() -> serde_json::Value {
+        json!({
+            "l1Head": B256_HEX,
+            "l2PreRoot": B256_HEX,
+            "l2PostRoot": B256_HEX,
+            "l2BlockNumber": 1609810,
+            "rollupConfigHash": B256_HEX,
+            "mailboxRoot": B256_HEX,
+            "multiBlockVKey": B256_HEX,
+            "proverAddress": ADDRESS_HEX
+        })
+    }
+
+    #[test]
+    fn proof_submission_accepts_op_succinct_extra_metadata() {
+        let body = json!({
+            "superblock_number": 1609810,
+            "superblock_hash": B256_HEX,
+            "chain_id": 100003,
+            "prover_address": ADDRESS_HEX,
+            "l1_head": B256_HEX,
+            "aggregation_outputs": valid_aggregation_outputs(),
+            "l2_start_block": 1609660,
+            "agg_vkey_hash": B256_HEX,
+            "agg_vk": B256_HEX,
+            "mailbox_info": {
+                "inbox_chains": [],
+                "outbox_chains": [],
+                "inbox_roots": [],
+                "outbox_roots": []
+            }
+        });
+
+        serde_json::from_value::<ProofSubmission>(body).expect("op-succinct payload should parse");
+    }
+
+    #[test]
+    fn aggregation_outputs_reject_unknown_fields() {
+        let mut aggregation_outputs = valid_aggregation_outputs();
+        aggregation_outputs["unexpectedNestedField"] = json!(true);
+
+        let body = json!({
+            "superblock_number": 1609810,
+            "chain_id": 100003,
+            "aggregation_outputs": aggregation_outputs,
+            "agg_vkey_hash": B256_HEX
+        });
+
+        let err = serde_json::from_value::<ProofSubmission>(body).unwrap_err();
+        assert!(
+            err.to_string().contains("unexpectedNestedField"),
+            "unexpected error: {err}"
+        );
+    }
 }
