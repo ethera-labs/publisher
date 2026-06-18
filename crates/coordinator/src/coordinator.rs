@@ -105,12 +105,12 @@ impl CoordinatorState {
     ) -> (InstanceId, Vec<u8>) {
         let seq_num = self.next_sequence_num;
         let period_id = self.current_period_id;
-        let compose_req = XtRequest::from(xt_req);
+        let spec_req = XtRequest::from(xt_req);
         let instance = Instance {
-            id: generate_instance_id(period_id, seq_num, &compose_req),
+            id: generate_instance_id(period_id, seq_num, &spec_req),
             period_id,
             sequence_number: seq_num,
-            xt_request: compose_req,
+            xt_request: spec_req,
         };
         let id = instance.id;
         self.next_sequence_num = seq_num + 1;

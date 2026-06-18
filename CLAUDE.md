@@ -56,7 +56,7 @@ transactions (xTs) so that every involved chain either commits or aborts togethe
 | `crates/config`      | YAML config + env-var overrides (`SECTION_FIELD` convention, no prefix)                 |
 | `crates/coordinator` | 2PC state machine (`CoordinatorState`), message dispatch (`handlers`), xT/proof reaping |
 | `crates/transport`   | QUIC server (quinn), length-prefixed framing, self-signed TLS, per-connection callbacks |
-| `crates/server`      | Axum HTTP API: `/health`, `/ready`, `/stats`, `/metrics`                                |
+| `crates/server`      | Axum HTTP API: `/health`, `/ready`, `/stats`, `/metrics`, `POST /v1/proofs/op-succinct` |
 | `crates/metrics`     | Prometheus metrics via `prometheus-client`                                              |
 | `crates/tracing`     | `tracing-subscriber` setup (json or pretty format)                                      |
 
