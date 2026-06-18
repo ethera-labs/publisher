@@ -8,44 +8,16 @@ use alloy::network::EthereumWallet;
 use alloy::primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy::providers::ProviderBuilder;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::sol;
 use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
+use crate::abi::{BootInfoStruct, IComposeL2OutputOracle, SuperblockAggregationOutputs};
 use crate::proof_types::ProofData;
 
 const MAX_RETRIES: u32 = 3;
 const INITIAL_RETRY_DELAY: Duration = Duration::from_secs(2);
-
-sol! {
-    struct SuperblockAggregationOutputs {
-        uint256 superblockNumber;
-        bytes32 parentSuperblockBatchHash;
-        BootInfoStruct[] bootInfo;
-    }
-
-    struct BootInfoStruct {
-        bytes32 l1Head;
-        bytes32 l2PreRoot;
-        bytes32 l2PostRoot;
-        uint64 l2BlockNumber;
-        bytes32 rollupConfigHash;
-    }
-
-    #[sol(rpc)]
-    interface IComposeL2OutputOracle {
-        function proposeL2Output(
-            bytes32 _outputRoot,
-            bytes32 _l1Hash,
-            bytes memory _extraData
-        ) external;
-
-        function latestSuperblockNumber() external view returns (uint256);
-        function getSuperblockHash(uint256 _superblockNumber) external view returns (bytes32);
-    }
-}
 
 #[derive(Debug)]
 pub struct L1Submitter {
@@ -130,16 +102,7 @@ impl L1Submitter {
 
         let boot_infos: Vec<BootInfoStruct> = ordered
             .iter()
-            .map(|p| {
-                let o = &p.aggregation_outputs;
-                BootInfoStruct {
-                    l1Head: o.l1_head,
-                    l2PreRoot: o.l2_pre_root,
-                    l2PostRoot: o.l2_post_root,
-                    l2BlockNumber: o.l2_block_number,
-                    rollupConfigHash: o.rollup_config_hash,
-                }
-            })
+            .map(|p| BootInfoStruct::from(&p.aggregation_outputs))
             .collect();
 
         let parent_hash = *self.parent_hash.lock().unwrap();
@@ -225,9 +188,36 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use alloy::primitives::B256;
+    use alloy::primitives::{Bytes, B256, U256};
+    use alloy::sol_types::SolValue;
 
     use super::L1Submitter;
+    use crate::abi::{BootInfoStruct, SuperblockAggregationOutputs};
+
+    const EXTRA_DATA_HEX: &str = "000000000000000000000000000000000000000000000000000000000000004000000000000000000000000000000000000000000000000000000000000001600000000000000000000000000000000000000000000000000000000000000007abababababababababababababababababababababababababababababababab00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333000000000000000000000000000000000000000000000000000000000000002a44444444444444444444444444444444444444444444444444444444444444440000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000";
+    const OUTPUT_PREIMAGE_HEX: &str = "00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000007abababababababababababababababababababababababababababababababab00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000001111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333000000000000000000000000000000000000000000000000000000000000002a4444444444444444444444444444444444444444444444444444444444444444";
+
+    fn sample_outputs() -> SuperblockAggregationOutputs {
+        SuperblockAggregationOutputs {
+            superblockNumber: U256::from(7u64),
+            parentSuperblockBatchHash: B256::repeat_byte(0xab),
+            bootInfo: vec![BootInfoStruct {
+                l1Head: B256::repeat_byte(0x11),
+                l2PreRoot: B256::repeat_byte(0x22),
+                l2PostRoot: B256::repeat_byte(0x33),
+                l2BlockNumber: 42,
+                rollupConfigHash: B256::repeat_byte(0x44),
+            }],
+        }
+    }
+
+    #[test]
+    fn extra_data_encoding_is_stable() {
+        let agg = sample_outputs();
+        let extra = (agg.clone(), Bytes::from(vec![0xde, 0xad, 0xbe, 0xef])).abi_encode_params();
+        assert_eq!(alloy::hex::encode(extra), EXTRA_DATA_HEX);
+        assert_eq!(alloy::hex::encode(agg.abi_encode()), OUTPUT_PREIMAGE_HEX);
+    }
 
     #[test]
     fn latest_superblock_state_accepts_seeded_genesis_hash() {
