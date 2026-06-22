@@ -51,18 +51,22 @@ async fn main() -> Result<()> {
             &s.l2oo_address,
             s.l1_rpc_url.clone(),
             s.proposer_key.clone(),
+            s.mock,
         ) {
             Ok(sub) => {
-                info!("L1 submitter configured for {}", s.l2oo_address);
+                info!(
+                    mock = s.mock,
+                    "L1 submitter configured for {}", s.l2oo_address
+                );
                 Some(sub)
             }
             Err(e) => {
-                error!(error = %e, "Failed to create L1 submitter — running without L1 settlement");
+                error!(error = %e, "Failed to create L1 submitter - running without L1 settlement");
                 None
             }
         }
     } else {
-        info!("No settlement config — running without L1 settlement");
+        info!("No settlement config - running without L1 settlement");
         None
     };
 

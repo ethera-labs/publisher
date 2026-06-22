@@ -37,6 +37,8 @@ pub struct SettlementConfig {
     pub l2oo_address: String,
     /// Hex-encoded private key of the approved proposer account.
     pub proposer_key: String,
+    /// Submit empty proof bytes for SP1MockVerifier-backed settlement.
+    pub mock: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,7 +102,7 @@ impl Default for ConsensusConfig {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(60),
-            period_duration: Duration::from_secs(3840),
+            period_duration: ethera_spec::PERIOD_DURATION,
             proof_window: Duration::from_secs(7200),
         }
     }
@@ -167,6 +169,7 @@ impl Config {
         env_str("SETTLEMENT_L1_RPC_URL", &mut self.settlement.l1_rpc_url);
         env_str("SETTLEMENT_L2OO_ADDRESS", &mut self.settlement.l2oo_address);
         env_str("SETTLEMENT_PROPOSER_KEY", &mut self.settlement.proposer_key);
+        env_bool("SETTLEMENT_MOCK", &mut self.settlement.mock);
     }
 
     fn validate(&self) -> Result<()> {

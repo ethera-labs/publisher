@@ -9,10 +9,9 @@ publish = false
 [dependencies]
 publisher-transport.workspace = true
 publisher-metrics.workspace = true
-compose-spec.workspace = true
-compose-spec-proto.workspace = true
-compose-spec-sbcp.workspace = true
-hex.workspace = true
+ethera-spec.workspace = true
+ethera-spec-proto.workspace = true
+ethera-spec-sbcp.workspace = true
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true
