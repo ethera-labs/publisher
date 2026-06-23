@@ -44,7 +44,7 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 rcgen = "0.13"
 
 # HTTP
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.8", features = ["macros"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout"] }
 
 # Protobuf
