@@ -1,19 +1,20 @@
-//! Typed bindings for the `ComposeL2OutputOracle` L1 settlement contract.
-//!
-//! `proposeL2Output` carries the proof payload as opaque `bytes`, so the struct
-//! layout below must match the contract's `_extraData` decoding exactly.
+//! Typed L1 settlement bindings.
 
 use alloy::sol;
 
 use crate::proof_types::AggregationOutputs;
 
+pub const COMPOSE_GAME_TYPE: u32 = 5555;
+
 sol! {
+    #[derive(Debug)]
     struct SuperblockAggregationOutputs {
         uint256 superblockNumber;
         bytes32 parentSuperblockBatchHash;
         BootInfoStruct[] bootInfo;
     }
 
+    #[derive(Debug)]
     struct BootInfoStruct {
         bytes32 l1Head;
         bytes32 l2PreRoot;
@@ -22,16 +23,33 @@ sol! {
         bytes32 rollupConfigHash;
     }
 
-    #[sol(rpc)]
-    interface IComposeL2OutputOracle {
-        function proposeL2Output(
-            bytes32 _outputRoot,
-            bytes32 _l1Hash,
-            bytes memory _extraData
-        ) external;
+    #[derive(Debug)]
+    struct OutputRootWithChainId {
+        uint256 chainId;
+        bytes32 root;
+    }
 
-        function latestSuperblockNumber() external view returns (uint256);
-        function getSuperblockHash(uint256 _superblockNumber) external view returns (bytes32);
+    #[derive(Debug)]
+    struct SuperRootProof {
+        bytes1 version;
+        uint64 timestamp;
+        OutputRootWithChainId[] outputRoots;
+    }
+
+    #[sol(rpc)]
+    interface IDisputeGameFactory {
+        function create(
+            uint32 _gameType,
+            bytes32 _rootClaim,
+            bytes calldata _extraData
+        ) external payable returns (address proxy_);
+
+        function initBonds(uint32 _gameType) external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface IComposeAnchorStateRegistry {
+        function getAnchorRoot() external view returns (bytes32 root_, uint256 l2SequenceNumber_);
     }
 }
 

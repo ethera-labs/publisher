@@ -44,19 +44,20 @@ async fn main() -> Result<()> {
 
     let s = &cfg.settlement;
     let l1_submitter = if !s.l1_rpc_url.is_empty()
-        && !s.l2oo_address.is_empty()
+        && !s.dispute_game_factory.is_empty()
         && !s.proposer_key.is_empty()
     {
         match L1Submitter::new(
-            &s.l2oo_address,
+            &s.dispute_game_factory,
+            &s.anchor_state_registry,
             s.l1_rpc_url.clone(),
             s.proposer_key.clone(),
-            s.mock,
         ) {
             Ok(sub) => {
                 info!(
-                    mock = s.mock,
-                    "L1 submitter configured for {}", s.l2oo_address
+                    proving_mode = ?cfg.proofs.proving_mode,
+                    factory = %s.dispute_game_factory,
+                    "L1 submitter configured"
                 );
                 Some(sub)
             }
@@ -76,6 +77,12 @@ async fn main() -> Result<()> {
         cfg.consensus.timeout,
         cfg.consensus.proof_window,
     );
+    let coordinator_builder = if cfg.proofs.proving_mode.is_mock() {
+        warn!("Proof generation set to mock mode");
+        coordinator_builder.with_mock_proofs()
+    } else {
+        coordinator_builder
+    };
     let coordinator = Arc::new(if let Some(sub) = l1_submitter {
         coordinator_builder.with_l1_submitter(sub)
     } else {
@@ -155,7 +162,7 @@ async fn period_loop(coordinator: Arc<Coordinator>, period_duration: Duration) {
     }
 }
 
-/// Runs periodic cleanup: times out stale 2PC instances and triggers rollback
+/// Runs periodic cleanup: times out stale consensus instances and triggers rollback
 /// for proof sets that exceed the proof window.
 async fn reaper_loop(coordinator: Arc<Coordinator>) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));

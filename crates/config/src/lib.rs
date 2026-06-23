@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Parser)]
 #[command(name = "publisher", about = "Ethera Shared Publisher")]
@@ -26,19 +26,50 @@ pub struct Config {
     pub metrics: MetricsConfig,
     pub log: LogConfig,
     pub settlement: SettlementConfig,
+    pub proofs: ProofsConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct SettlementConfig {
-    /// L1 JSON-RPC endpoint (e.g. `http://l1-rpc:8545`).
+    /// L1 JSON-RPC endpoint.
     pub l1_rpc_url: String,
-    /// Deployed `ComposeL2OutputOracle` contract address.
-    pub l2oo_address: String,
-    /// Hex-encoded private key of the approved proposer account.
+    /// `DisputeGameFactory` a `ComposeDisputeGame` is created on per superblock.
+    pub dispute_game_factory: String,
+    /// `ComposeAnchorStateRegistry` the next superblock number resumes from.
+    pub anchor_state_registry: String,
+    /// Hex-encoded private key of the approved proposer.
     pub proposer_key: String,
-    /// Submit empty proof bytes for SP1MockVerifier-backed settlement.
     pub mock: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ProofsConfig {
+    pub proving_mode: ProvingMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProvingMode {
+    Mock,
+    #[default]
+    Real,
+}
+
+impl ProvingMode {
+    pub fn is_mock(self) -> bool {
+        matches!(self, Self::Mock)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProvingMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        parse_proving_mode(&value).map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,6 +154,14 @@ impl Default for LogConfig {
     }
 }
 
+impl Default for ProofsConfig {
+    fn default() -> Self {
+        Self {
+            proving_mode: ProvingMode::Real,
+        }
+    }
+}
+
 impl Config {
     /// Loads config from a YAML file, applies env overrides, and validates.
     /// Falls back to defaults if the file does not exist.
@@ -167,9 +206,32 @@ impl Config {
         env_bool("LOG_PRETTY", &mut self.log.pretty);
 
         env_str("SETTLEMENT_L1_RPC_URL", &mut self.settlement.l1_rpc_url);
-        env_str("SETTLEMENT_L2OO_ADDRESS", &mut self.settlement.l2oo_address);
+        env_str(
+            "SETTLEMENT_DISPUTE_GAME_FACTORY",
+            &mut self.settlement.dispute_game_factory,
+        );
+        env_str(
+            "SETTLEMENT_ANCHOR_STATE_REGISTRY",
+            &mut self.settlement.anchor_state_registry,
+        );
         env_str("SETTLEMENT_PROPOSER_KEY", &mut self.settlement.proposer_key);
         env_bool("SETTLEMENT_MOCK", &mut self.settlement.mock);
+
+        let mut explicit_proving_mode =
+            env_proving_mode("PROOFS_PROVING_MODE", &mut self.proofs.proving_mode);
+        explicit_proving_mode |= env_proving_mode("PROVING_MODE", &mut self.proofs.proving_mode);
+        explicit_proving_mode |= env_proving_mode("PROVE_MODE", &mut self.proofs.proving_mode);
+        if let Some(bypass) = env_bool_value("PROOFS_BYPASS_PROVER") {
+            self.proofs.proving_mode = if bypass {
+                ProvingMode::Mock
+            } else {
+                ProvingMode::Real
+            };
+            explicit_proving_mode = true;
+        }
+        if self.settlement.mock && !explicit_proving_mode {
+            self.proofs.proving_mode = ProvingMode::Mock;
+        }
     }
 
     fn validate(&self) -> Result<()> {
@@ -206,12 +268,39 @@ fn env_str(key: &str, target: &mut String) {
 }
 
 fn env_bool(key: &str, target: &mut bool) {
-    if let Ok(val) = std::env::var(key) {
-        match val.to_lowercase().as_str() {
-            "true" | "1" | "yes" => *target = true,
-            "false" | "0" | "no" => *target = false,
-            _ => {}
-        }
+    if let Some(val) = env_bool_value(key) {
+        *target = val;
+    }
+}
+
+fn env_bool_value(key: &str) -> Option<bool> {
+    let val = std::env::var(key).ok()?;
+    match val.to_lowercase().as_str() {
+        "true" | "1" | "yes" => Some(true),
+        "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
+}
+
+fn env_proving_mode(key: &str, target: &mut ProvingMode) -> bool {
+    let Ok(val) = std::env::var(key) else {
+        return false;
+    };
+    if let Ok(mode) = parse_proving_mode(&val) {
+        *target = mode;
+        true
+    } else {
+        false
+    }
+}
+
+fn parse_proving_mode(value: &str) -> Result<ProvingMode, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "mock" | "bypass" | "bypass_prover" => Ok(ProvingMode::Mock),
+        "real" | "prover" => Ok(ProvingMode::Real),
+        other => Err(format!(
+            "invalid proving mode '{other}', expected 'mock' or 'real'"
+        )),
     }
 }
 
@@ -248,6 +337,7 @@ mod tests {
         assert!(cfg.metrics.enabled);
         assert_eq!(cfg.log.level, "info");
         assert!(!cfg.log.pretty);
+        assert_eq!(cfg.proofs.proving_mode, ProvingMode::Real);
     }
 
     #[test]
@@ -262,6 +352,8 @@ consensus:
 log:
   level: debug
   pretty: true
+proofs:
+  proving_mode: mock
 "#;
         let cfg: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.server.listen_addr, ":9090");
@@ -271,6 +363,20 @@ log:
         assert_eq!(cfg.log.level, "debug");
         assert!(cfg.log.pretty);
         assert_eq!(cfg.api.listen_addr, ":8081");
+        assert_eq!(cfg.proofs.proving_mode, ProvingMode::Mock);
+    }
+
+    #[test]
+    fn proving_mode_parses_supported_values() {
+        assert_eq!(parse_proving_mode("mock").unwrap(), ProvingMode::Mock);
+        assert_eq!(parse_proving_mode("bypass").unwrap(), ProvingMode::Mock);
+        assert_eq!(
+            parse_proving_mode("bypass_prover").unwrap(),
+            ProvingMode::Mock
+        );
+        assert_eq!(parse_proving_mode("real").unwrap(), ProvingMode::Real);
+        assert_eq!(parse_proving_mode("prover").unwrap(), ProvingMode::Real);
+        assert!(parse_proving_mode("invalid").is_err());
     }
 
     #[test]
