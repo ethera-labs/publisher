@@ -248,11 +248,19 @@ pub struct Coordinator {
     pub(crate) server: Arc<QuicServer>,
     pub(crate) metrics: Option<Arc<PublisherMetrics>>,
     pub(crate) l1_submitter: Option<Arc<L1Submitter>>,
+    proof_mode: ProofMode,
     scp_timeout: Duration,
     proof_window: Duration,
     messages_processed: AtomicU64,
     broadcasts_sent: AtomicU64,
     start_time: Instant,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum ProofMode {
+    #[default]
+    Real,
+    Mock,
 }
 
 impl std::fmt::Debug for Coordinator {
@@ -273,6 +281,7 @@ impl Coordinator {
             server,
             metrics,
             l1_submitter: None,
+            proof_mode: ProofMode::Real,
             scp_timeout,
             proof_window,
             messages_processed: AtomicU64::new(0),
@@ -283,6 +292,11 @@ impl Coordinator {
 
     pub fn with_l1_submitter(mut self, submitter: L1Submitter) -> Self {
         self.l1_submitter = Some(Arc::new(submitter));
+        self
+    }
+
+    pub fn with_mock_proofs(mut self) -> Self {
+        self.proof_mode = ProofMode::Mock;
         self
     }
 
@@ -639,8 +653,20 @@ impl Coordinator {
 
             if let Some(submitter) = self.l1_submitter.clone() {
                 let state = self.state.clone();
+                let proof_mode = self.proof_mode;
                 tokio::spawn(async move {
-                    match submitter.submit(submit_sb_number, &proofs).await {
+                    let result = match proof_mode {
+                        ProofMode::Mock => submitter.submit_mock(submit_sb_number, &proofs).await,
+                        ProofMode::Real => {
+                            warn!(
+                                superblock_number = submit_sb_number,
+                                "Skipping L1 submission without an aggregated proof"
+                            );
+                            return;
+                        }
+                    };
+
+                    match result {
                         Ok(()) => {
                             let mut s = state.write().await;
                             s.last_finalized_superblock_number = submit_sb_number;
