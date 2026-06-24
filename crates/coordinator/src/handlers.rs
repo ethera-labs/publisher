@@ -114,16 +114,16 @@ async fn handle_proof(
 }
 
 pub fn parse_chain_id(client_id: &str) -> Result<ChainId, ParseChainIdError> {
-    let num_str: String = client_id
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    // ASCII digits are single-byte, so the byte count is a valid `str` boundary;
+    // parse the prefix slice in place rather than collecting into a `String`.
+    let end = client_id.bytes().take_while(u8::is_ascii_digit).count();
+    let digits = &client_id[..end];
 
-    if num_str.is_empty() {
+    if digits.is_empty() {
         return Err(ParseChainIdError(client_id.to_string()));
     }
 
-    num_str
+    digits
         .parse::<u64>()
         .map(ChainId::new)
         .map_err(|_| ParseChainIdError(client_id.to_string()))

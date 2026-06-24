@@ -10,7 +10,7 @@ pub enum ProvingMode {
 }
 
 impl ProvingMode {
-    pub fn is_mock(self) -> bool {
+    pub const fn is_mock(self) -> bool {
         matches!(self, Self::Mock)
     }
 }

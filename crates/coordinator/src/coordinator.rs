@@ -1,6 +1,6 @@
 //! Core coordinator state and public API.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -163,11 +163,13 @@ impl CoordinatorState {
 
         xt.votes.insert(chain_id, vote);
 
-        // A single reject decides false immediately; otherwise wait for unanimity.
+        // A single reject decides false immediately and removes the xT, so by the
+        // time every chain has voted here, all recorded votes are `true` -- the
+        // decision is unanimous commit without re-scanning the map.
         let decision = if !vote {
             false
         } else if xt.votes.len() == xt.chains.len() {
-            xt.votes.values().all(|&v| v)
+            true
         } else {
             return None;
         };
@@ -714,12 +716,16 @@ impl Coordinator {
 /// Reads chain ids straight from the wire request; converting to the domain
 /// `XtRequest` first would clone every transaction payload.
 fn extract_chains(req: &ethera_spec_proto::XtRequest) -> Vec<ChainId> {
-    let mut seen = HashSet::new();
-    req.transaction_requests
-        .iter()
-        .map(|tr| ChainId::new(tr.chain_id))
-        .filter(|&c| seen.insert(c))
-        .collect()
+    // The participating chain set is tiny (typically 2-3), so a linear scan to
+    // dedup is cheaper than allocating a `HashSet`.
+    let mut chains: Vec<ChainId> = Vec::new();
+    for tr in &req.transaction_requests {
+        let chain = ChainId::new(tr.chain_id);
+        if !chains.contains(&chain) {
+            chains.push(chain);
+        }
+    }
+    chains
 }
 
 #[cfg(test)]
