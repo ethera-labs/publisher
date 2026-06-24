@@ -1,7 +1,7 @@
 //! L1 settlement submission.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use alloy::eips::BlockNumberOrTag;
@@ -57,6 +57,14 @@ impl L1Submitter {
         })
     }
 
+    /// Locks the cached parent hash, tolerating a poisoned mutex: the guarded
+    /// `B256` has no broken invariant, so recovering the inner value is safe.
+    fn lock_parent_hash(&self) -> MutexGuard<'_, B256> {
+        self.parent_hash
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn build_provider(&self) -> Result<impl Provider> {
         let signer: PrivateKeySigner = self.private_key.parse().context("invalid proposer_key")?;
         let wallet = EthereumWallet::from(signer);
@@ -85,7 +93,7 @@ impl L1Submitter {
             return Ok(None);
         };
 
-        *self.parent_hash.lock().unwrap() = state.1;
+        *self.lock_parent_hash() = state.1;
         Ok(Some(state))
     }
 
@@ -102,7 +110,7 @@ impl L1Submitter {
         superblock_number: u64,
         proofs: &HashMap<u64, ProofData>,
     ) -> Result<()> {
-        let parent_hash = *self.parent_hash.lock().unwrap();
+        let parent_hash = *self.lock_parent_hash();
         let payload = mock_payload(superblock_number, parent_hash, proofs)?;
         self.submit(payload).await
     }
@@ -161,7 +169,7 @@ impl L1Submitter {
                             tx_hash = %receipt.transaction_hash,
                             "Dispute game created"
                         );
-                        *self.parent_hash.lock().unwrap() = payload.next_parent_hash;
+                        *self.lock_parent_hash() = payload.next_parent_hash;
                         return Ok(());
                     }
                     Err(e) => last_err = Some(e.into()),

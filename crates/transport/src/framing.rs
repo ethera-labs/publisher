@@ -10,7 +10,7 @@ pub struct LengthPrefixCodec {
 }
 
 impl LengthPrefixCodec {
-    pub fn new(max_message_size: usize) -> Self {
+    pub const fn new(max_message_size: usize) -> Self {
         Self { max_message_size }
     }
 

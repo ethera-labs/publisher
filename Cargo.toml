@@ -93,6 +93,7 @@ rust_2018_idioms = { level = "deny", priority = -1 }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+perf = { level = "deny", priority = -1 }
 dbg_macro = "warn"
 doc_markdown = "warn"
 uninlined_format_args = "warn"
