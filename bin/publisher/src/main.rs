@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use alloy_primitives::B256;
 use anyhow::{Context, Result};
 use clap::Parser;
 use prometheus_client::registry::Registry;
@@ -13,7 +12,7 @@ use tracing::{error, info, warn};
 use publisher_config::Cli;
 use publisher_coordinator::coordinator::Coordinator;
 use publisher_coordinator::handlers::{self, parse_chain_id};
-use publisher_coordinator::l1_submit::{L1Submitter, RecoveryCheckpoint};
+use publisher_coordinator::l1_submit::L1Submitter;
 use publisher_metrics::PublisherMetrics;
 use publisher_server::router::build_router;
 use publisher_server::state::AppState;
@@ -44,22 +43,6 @@ async fn main() -> Result<()> {
     ));
 
     let s = &cfg.settlement;
-    let recovery_checkpoint = match (
-        s.recovery_checkpoint_game_index,
-        s.recovery_checkpoint_number,
-        s.recovery_checkpoint_hash.as_str(),
-    ) {
-        (Some(game_index), Some(superblock_number), hash) if !hash.is_empty() => {
-            Some(RecoveryCheckpoint {
-                game_index,
-                superblock_number,
-                superblock_hash: hash
-                    .parse::<B256>()
-                    .context("invalid settlement recovery checkpoint hash")?,
-            })
-        }
-        _ => None,
-    };
     let l1_submitter = if !s.l1_rpc_url.is_empty()
         && !s.dispute_game_factory.is_empty()
         && !s.proposer_key.is_empty()
@@ -69,7 +52,6 @@ async fn main() -> Result<()> {
             &s.anchor_state_registry,
             s.l1_rpc_url.clone(),
             s.proposer_key.clone(),
-            recovery_checkpoint,
         ) {
             Ok(sub) => {
                 info!(

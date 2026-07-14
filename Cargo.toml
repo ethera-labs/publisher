@@ -32,7 +32,6 @@ ethera-spec-sbcp = { git = "https://github.com/ethera-labs/specs.git", branch = 
 # Async
 tokio = { version = "1.43", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-futures = "0.3"
 
 # QUIC
 quinn = "0.11"

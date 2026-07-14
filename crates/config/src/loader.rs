@@ -48,17 +48,6 @@ impl Config {
             !self.consensus.proof_window.is_zero(),
             "consensus.proof_window must be positive"
         );
-
-        let checkpoint_fields = [
-            self.settlement.recovery_checkpoint_game_index.is_some(),
-            self.settlement.recovery_checkpoint_number.is_some(),
-            !self.settlement.recovery_checkpoint_hash.is_empty(),
-        ];
-        anyhow::ensure!(
-            checkpoint_fields.iter().all(|configured| *configured)
-                || checkpoint_fields.iter().all(|configured| !*configured),
-            "settlement recovery checkpoint requires game index, number, and hash"
-        );
         Ok(())
     }
 }

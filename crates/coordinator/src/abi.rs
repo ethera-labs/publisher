@@ -36,12 +36,21 @@ sol! {
         OutputRootWithChainId[] outputRoots;
     }
 
+    #[derive(Debug)]
+    struct GameSearchResult {
+        uint256 index;
+        bytes32 metadata;
+        uint64 timestamp;
+        bytes32 rootClaim;
+        bytes extraData;
+    }
+
     #[sol(rpc)]
     interface IDisputeGameFactory {
         function gameCount() external view returns (uint256);
 
-        function gameAtIndex(uint256 _index)
-            external view returns (uint32 gameType_, uint64 timestamp_, address proxy_);
+        function findLatestGames(uint32 _gameType, uint256 _start, uint256 _n)
+            external view returns (GameSearchResult[] games_);
 
         function create(
             uint32 _gameType,
@@ -50,11 +59,6 @@ sol! {
         ) external payable returns (address proxy_);
 
         function initBonds(uint32 _gameType) external view returns (uint256);
-    }
-
-    #[sol(rpc)]
-    interface IDisputeGame {
-        function extraData() external view returns (bytes);
     }
 
     #[sol(rpc)]

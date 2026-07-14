@@ -100,9 +100,6 @@ Environment variables override YAML values (uppercase `SECTION_FIELD` convention
 | `settlement.dispute_game_factory`           | `SETTLEMENT_DISPUTE_GAME_FACTORY`           | empty          |
 | `settlement.anchor_state_registry`          | `SETTLEMENT_ANCHOR_STATE_REGISTRY`          | empty          |
 | `settlement.proposer_key`                   | `SETTLEMENT_PROPOSER_KEY`                   | empty          |
-| `settlement.recovery_checkpoint_game_index` | `SETTLEMENT_RECOVERY_CHECKPOINT_GAME_INDEX` | empty          |
-| `settlement.recovery_checkpoint_number`     | `SETTLEMENT_RECOVERY_CHECKPOINT_NUMBER`     | empty          |
-| `settlement.recovery_checkpoint_hash`       | `SETTLEMENT_RECOVERY_CHECKPOINT_HASH`       | empty          |
 | `settlement.mock`                           | `SETTLEMENT_MOCK`                           | `false`        |
 | `proofs.proving_mode`                       | `PROOFS_PROVING_MODE`                       | `real`         |
 | `proofs.required_chain_ids`                 | `PROOFS_COLLECTOR_REQUIRED_CHAIN_IDS`       | empty          |

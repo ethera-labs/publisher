@@ -2939,7 +2939,6 @@ dependencies = [
 name = "publisher"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "anyhow",
  "axum",
  "clap",
@@ -2979,7 +2978,6 @@ dependencies = [
  "ethera-spec",
  "ethera-spec-proto",
  "ethera-spec-sbcp",
- "futures",
  "prost",
  "publisher-metrics",
  "publisher-transport",

@@ -27,12 +27,6 @@ pub struct SettlementConfig {
     pub anchor_state_registry: String,
     /// Hex-encoded private key of the approved proposer.
     pub proposer_key: String,
-    /// Factory game index of the immutable recovery checkpoint.
-    pub recovery_checkpoint_game_index: Option<u64>,
-    /// Superblock number stored at the immutable recovery checkpoint.
-    pub recovery_checkpoint_number: Option<u64>,
-    /// Hash of the checkpoint `SuperblockBatch`.
-    pub recovery_checkpoint_hash: String,
     pub mock: bool,
 }
 
