@@ -16,17 +16,8 @@ pub struct AggregationOutputs {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MailboxInfo {
-    pub inbox_chains: Vec<B256>,
-    pub outbox_chains: Vec<B256>,
-    pub inbox_roots: Vec<B256>,
-    pub outbox_roots: Vec<B256>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProofData {
     pub aggregation_outputs: AggregationOutputs,
     pub compressed_proof: Vec<u8>,
     pub agg_vkey_hash: B256,
-    pub mailbox_info: MailboxInfo,
 }

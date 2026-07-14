@@ -1238,9 +1238,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.0"
+version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b193af5b67834b676abd72466a96c1024e6a6ad978a1f484bd90b85c94041351"
+checksum = "1ddb117e43bbf7dacf0a4190fef4d345b9bad68dfc649cb349e7d17d28428e51"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1260,9 +1260,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.6.0"
+version = "4.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1110bd8a634a1ab8cb04345d8d878267d57c3cf1b38d91b71af6686408bbca6a"
+checksum = "f2ce8604710f6733aa641a2b3731eaa1e8b3d9973d5e3565da11800813f997a9"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -1299,28 +1299,6 @@ checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes",
  "memchr",
-]
-
-[[package]]
-name = "compose-spec"
-version = "0.1.0"
-
-[[package]]
-name = "compose-spec-proto"
-version = "0.1.0"
-dependencies = [
- "compose-spec",
- "prost",
-]
-
-[[package]]
-name = "compose-spec-sbcp"
-version = "0.1.0"
-dependencies = [
- "compose-spec",
- "sha2",
- "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]
@@ -1687,6 +1665,31 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ethera-spec"
+version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#7823c6caf0cc6b122ca968fbfe1461f4f334f2e7"
+
+[[package]]
+name = "ethera-spec-proto"
+version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#7823c6caf0cc6b122ca968fbfe1461f4f334f2e7"
+dependencies = [
+ "ethera-spec",
+ "prost",
+]
+
+[[package]]
+name = "ethera-spec-sbcp"
+version = "0.1.0"
+source = "git+https://github.com/ethera-labs/specs.git?branch=feat%2Fcompose-rs#7823c6caf0cc6b122ca968fbfe1461f4f334f2e7"
+dependencies = [
+ "ethera-spec",
+ "sha2",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -2115,7 +2118,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -2939,6 +2942,7 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "ethera-spec",
  "prometheus-client",
  "publisher-config",
  "publisher-coordinator",
@@ -2957,6 +2961,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ethera-spec",
  "humantime",
  "humantime-serde",
  "serde",
@@ -2970,16 +2975,14 @@ dependencies = [
  "alloy",
  "alloy-primitives",
  "anyhow",
- "compose-spec",
- "compose-spec-proto",
- "compose-spec-sbcp",
- "hex",
+ "ethera-spec",
+ "ethera-spec-proto",
+ "ethera-spec-sbcp",
  "prost",
  "publisher-metrics",
  "publisher-transport",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "tracing",
 ]
@@ -2997,7 +3000,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "axum",
- "compose-spec",
+ "ethera-spec",
  "prometheus-client",
  "publisher-coordinator",
  "serde",
@@ -3047,7 +3050,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3056,9 +3059,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.14"
+version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "434b42fec591c96ef50e21e886936e66d3cc3f737104fdb9b737c40ffb94c098"
+checksum = "4fcb935c5bec503c2f0e306bdd3e58bb9029dcb14fa8d9ac76e3a5256ac0763e"
 dependencies = [
  "aws-lc-rs",
  "bytes",
@@ -3087,7 +3090,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]

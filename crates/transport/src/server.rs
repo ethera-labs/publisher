@@ -108,18 +108,23 @@ impl QuicServer {
     }
 
     pub async fn broadcast_raw(&self, data: &[u8], exclude: &str) -> Result<(), TransportError> {
-        let connections: Vec<(String, quinn::Connection)> = {
+        // Encode the frame once and hand each peer a cheap `Bytes` clone instead
+        // of re-encoding (allocating + copying the payload) per connection. This
+        // runs on the 2PC critical path (StartInstance/Decided/StartPeriod).
+        let frame = self.codec.encode(data)?;
+
+        let connections: Vec<quinn::Connection> = {
             let reg = self.registry.read().await;
             reg.connections
                 .iter()
                 .filter(|(id, _)| *id != exclude)
-                .map(|(id, conn)| (id.clone(), conn.clone()))
+                .map(|(_, conn)| conn.clone())
                 .collect()
         };
 
-        for (client_id, conn) in connections {
-            if let Err(e) = send_frame(&conn, &self.codec, data).await {
-                warn!(client_id = %client_id, error = %e, "Failed to send to client");
+        for conn in connections {
+            if let Err(e) = write_frame(&conn, &frame).await {
+                warn!(remote = %conn.remote_address(), error = %e, "Failed to send to client");
             }
         }
         Ok(())
@@ -141,12 +146,17 @@ async fn send_frame(
     codec: &LengthPrefixCodec,
     data: &[u8],
 ) -> Result<(), TransportError> {
+    let frame = codec.encode(data)?;
+    write_frame(conn, &frame).await
+}
+
+/// Writes an already length-prefixed frame on a fresh unidirectional stream.
+async fn write_frame(conn: &quinn::Connection, frame: &[u8]) -> Result<(), TransportError> {
     let mut send = conn
         .open_uni()
         .await
         .map_err(|e| TransportError::Quic(e.to_string()))?;
-    let frame = codec.encode(data)?;
-    send.write_all(&frame)
+    send.write_all(frame)
         .await
         .map_err(|e| TransportError::Quic(e.to_string()))?;
     send.finish()

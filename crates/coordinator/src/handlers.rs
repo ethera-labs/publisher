@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
-use compose_spec::ChainId;
-use compose_spec_proto::{Message, Payload};
+use ethera_spec::ChainId;
+use ethera_spec_proto::{Message, Payload};
 use prost::Message as _;
 use tracing::{error, info, warn};
 
 use crate::coordinator::Coordinator;
-use crate::proof_types::{AggregationOutputs, MailboxInfo, ProofData};
+use crate::proof_types::{AggregationOutputs, ProofData};
 
 pub async fn dispatch(coordinator: Arc<Coordinator>, client_id: String, data: Vec<u8>) {
     coordinator.inc_messages();
@@ -61,7 +61,7 @@ pub async fn dispatch(coordinator: Arc<Coordinator>, client_id: String, data: Ve
 async fn handle_handshake(
     coordinator: Arc<Coordinator>,
     client_id: &str,
-    req: &compose_spec_proto::HandshakeRequest,
+    req: &ethera_spec_proto::HandshakeRequest,
 ) {
     info!(client_id, requested_id = %req.client_id, "Handshake received");
 
@@ -72,10 +72,10 @@ async fn handle_handshake(
         }
     }
 
-    let resp = compose_spec_proto::Message {
+    let resp = ethera_spec_proto::Message {
         sender_id: "publisher".into(),
         payload: Some(Payload::HandshakeResponse(
-            compose_spec_proto::HandshakeResponse {
+            ethera_spec_proto::HandshakeResponse {
                 accepted: true,
                 error: String::new(),
                 session_id: client_id.to_string(),
@@ -94,7 +94,7 @@ async fn handle_handshake(
 async fn handle_proof(
     coordinator: Arc<Coordinator>,
     client_id: &str,
-    proof: compose_spec_proto::Proof,
+    proof: ethera_spec_proto::Proof,
 ) {
     // The Proof wire message carries no chain_id; the sender chain is identified
     // by its registered connection, mirroring the SBCP publisher spec.
@@ -107,7 +107,6 @@ async fn handle_proof(
         aggregation_outputs: AggregationOutputs::default(),
         compressed_proof: proof.proof_data,
         agg_vkey_hash: Default::default(),
-        mailbox_info: MailboxInfo::default(),
     };
     coordinator
         .receive_proof(proof.superblock_number, chain_id.get(), data)
@@ -115,16 +114,16 @@ async fn handle_proof(
 }
 
 pub fn parse_chain_id(client_id: &str) -> Result<ChainId, ParseChainIdError> {
-    let num_str: String = client_id
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    // ASCII digits are single-byte, so the byte count is a valid `str` boundary;
+    // parse the prefix slice in place rather than collecting into a `String`.
+    let end = client_id.bytes().take_while(u8::is_ascii_digit).count();
+    let digits = &client_id[..end];
 
-    if num_str.is_empty() {
+    if digits.is_empty() {
         return Err(ParseChainIdError(client_id.to_string()));
     }
 
-    num_str
+    digits
         .parse::<u64>()
         .map(ChainId::new)
         .map_err(|_| ParseChainIdError(client_id.to_string()))
