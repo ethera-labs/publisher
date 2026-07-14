@@ -36,8 +36,22 @@ sol! {
         OutputRootWithChainId[] outputRoots;
     }
 
+    #[derive(Debug)]
+    struct GameSearchResult {
+        uint256 index;
+        bytes32 metadata;
+        uint64 timestamp;
+        bytes32 rootClaim;
+        bytes extraData;
+    }
+
     #[sol(rpc)]
     interface IDisputeGameFactory {
+        function gameCount() external view returns (uint256);
+
+        function findLatestGames(uint32 _gameType, uint256 _start, uint256 _n)
+            external view returns (GameSearchResult[] games_);
+
         function create(
             uint32 _gameType,
             bytes32 _rootClaim,
@@ -50,6 +64,13 @@ sol! {
     #[sol(rpc)]
     interface IComposeAnchorStateRegistry {
         function getAnchorRoot() external view returns (bytes32 root_, uint256 l2SequenceNumber_);
+
+        function anchorGame() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    interface IDisputeGame {
+        function extraData() external view returns (bytes);
     }
 }
 

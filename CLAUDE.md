@@ -45,8 +45,10 @@ transactions (xTs) so that every involved chain either commits or aborts togethe
 4. After decision, `drain_queue` attempts to start the next queued xT whose chains are no longer locked.
 5. A background `reaper_loop` (1 s tick) calls `reap_timed_out_xts` to abort stale xTs that exceed
    `consensus.timeout`, and `reap_expired_proofs` to clear stale proof sets and trigger rollback.
-6. The publisher also broadcasts `StartPeriod` on the configured `consensus.period_duration` cadence and can
-   broadcast `Rollback`.
+6. The publisher derives each `PeriodId` from the fixed `consensus.genesis_unix_seconds` and
+   `consensus.period_duration`, then broadcasts `StartPeriod` on that cadence.
+7. On startup, it recovers the canonical L1 superblock branch, waits for configured chains, broadcasts `Rollback`, and
+   only then accepts xTs and proofs.
 
 ### Crate responsibilities
 
@@ -81,21 +83,23 @@ encryption).
 Configuration is loaded from a YAML file (`config.yaml` by default, override with `--config <path>`).
 Environment variables override YAML values (uppercase `SECTION_FIELD` convention, no prefix):
 
-| YAML Key                           | Env Override                       | Default        |
-|------------------------------------|------------------------------------|----------------|
-| `server.listen_addr`               | `SERVER_LISTEN_ADDR`               | `0.0.0.0:8080` |
-| `server.max_message_size`          | `SERVER_MAX_MESSAGE_SIZE`          | `4194304`      |
-| `api.listen_addr`                  | `API_LISTEN_ADDR`                  | `0.0.0.0:8081` |
-| `api.request_timeout`              | `API_REQUEST_TIMEOUT`              | `15s`          |
-| `consensus.timeout`                | `CONSENSUS_TIMEOUT`                | `60s`          |
-| `consensus.period_duration`        | `CONSENSUS_PERIOD_DURATION`        | `3840s`        |
-| `consensus.proof_window`           | `CONSENSUS_PROOF_WINDOW`           | `7200s`        |
-| `metrics.enabled`                  | `METRICS_ENABLED`                  | `true`         |
-| `log.level`                        | `LOG_LEVEL`                        | `info`         |
-| `log.pretty`                       | `LOG_PRETTY`                       | `false`        |
-| `settlement.l1_rpc_url`            | `SETTLEMENT_L1_RPC_URL`            | empty          |
-| `settlement.dispute_game_factory`  | `SETTLEMENT_DISPUTE_GAME_FACTORY`  | empty          |
-| `settlement.anchor_state_registry` | `SETTLEMENT_ANCHOR_STATE_REGISTRY` | empty          |
-| `settlement.proposer_key`          | `SETTLEMENT_PROPOSER_KEY`          | empty          |
-| `settlement.mock`                  | `SETTLEMENT_MOCK`                  | `false`        |
-| `proofs.proving_mode`              | `PROOFS_PROVING_MODE`              | `real`         |
+| YAML Key                                    | Env Override                                | Default        |
+|---------------------------------------------|---------------------------------------------|----------------|
+| `server.listen_addr`                        | `SERVER_LISTEN_ADDR`                        | `0.0.0.0:8080` |
+| `server.max_message_size`                   | `SERVER_MAX_MESSAGE_SIZE`                   | `4194304`      |
+| `api.listen_addr`                           | `API_LISTEN_ADDR`                           | `0.0.0.0:8081` |
+| `api.request_timeout`                       | `API_REQUEST_TIMEOUT`                       | `15s`          |
+| `consensus.timeout`                         | `CONSENSUS_TIMEOUT`                         | `60s`          |
+| `consensus.period_duration`                 | `CONSENSUS_PERIOD_DURATION`                 | `3840s`        |
+| `consensus.genesis_unix_seconds`            | `CONSENSUS_GENESIS_UNIX_SECONDS`            | required       |
+| `consensus.proof_window`                    | `CONSENSUS_PROOF_WINDOW`                    | `7200s`        |
+| `metrics.enabled`                           | `METRICS_ENABLED`                           | `true`         |
+| `log.level`                                 | `LOG_LEVEL`                                 | `info`         |
+| `log.pretty`                                | `LOG_PRETTY`                                | `false`        |
+| `settlement.l1_rpc_url`                     | `SETTLEMENT_L1_RPC_URL`                     | empty          |
+| `settlement.dispute_game_factory`           | `SETTLEMENT_DISPUTE_GAME_FACTORY`           | empty          |
+| `settlement.anchor_state_registry`          | `SETTLEMENT_ANCHOR_STATE_REGISTRY`          | empty          |
+| `settlement.proposer_key`                   | `SETTLEMENT_PROPOSER_KEY`                   | empty          |
+| `settlement.mock`                           | `SETTLEMENT_MOCK`                           | `false`        |
+| `proofs.proving_mode`                       | `PROOFS_PROVING_MODE`                       | `real`         |
+| `proofs.required_chain_ids`                 | `PROOFS_COLLECTOR_REQUIRED_CHAIN_IDS`       | empty          |

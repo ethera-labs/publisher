@@ -17,6 +17,7 @@ publisher-metrics.workspace = true
 publisher-server.workspace = true
 publisher-tracing.workspace = true
 publisher-transport.workspace = true
+ethera-spec.workspace = true
 anyhow.workspace = true
 rustls.workspace = true
 axum.workspace = true

@@ -38,7 +38,7 @@ ci: fmt-check lint test
 ci-full: fmt-check lint test deny machete
 
 dev:
-	LOG_PRETTY=true LOG_LEVEL=debug cargo run -p publisher
+	CONSENSUS_GENESIS_UNIX_SECONDS=1700000000 LOG_PRETTY=true LOG_LEVEL=debug cargo run -p publisher
 
 install-hooks:
 	pre-commit install

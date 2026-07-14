@@ -1,9 +1,9 @@
 //! Ethera Shared Publisher.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use prometheus_client::registry::Registry;
 use tokio::net::TcpListener;
@@ -89,7 +89,14 @@ async fn main() -> Result<()> {
         coordinator_builder
     });
 
-    coordinator.init_from_l1().await;
+    coordinator.init_from_l1().await?;
+
+    let period_schedule = PeriodSchedule::new(
+        cfg.consensus
+            .genesis_unix_seconds
+            .context("consensus.genesis_unix_seconds is required")?,
+        cfg.consensus.period_duration,
+    )?;
 
     let coord_for_handler = coordinator.clone();
     let on_message = Arc::new(move |client_id: String, data: Vec<u8>| {
@@ -126,9 +133,18 @@ async fn main() -> Result<()> {
 
     let _quic_handle = server.start(on_message, Some(on_connect), Some(on_disconnect))?;
 
+    let recovery_period = period_schedule.period_at(SystemTime::now())?;
+    coordinator
+        .wait_for_chains(&cfg.proofs.required_chain_ids, cfg.consensus.timeout)
+        .await?;
+    coordinator
+        .broadcast_recovery_rollback(recovery_period)
+        .await?;
+    coordinator.start_period(recovery_period).await?;
+    coordinator.activate_protocol();
+
     let coord_for_period = coordinator.clone();
-    let period_duration = cfg.consensus.period_duration;
-    tokio::spawn(async move { period_loop(coord_for_period, period_duration).await });
+    tokio::spawn(async move { period_loop(coord_for_period, period_schedule).await });
 
     let coord_for_reaper = coordinator.clone();
     tokio::spawn(async move { reaper_loop(coord_for_reaper).await });
@@ -151,14 +167,64 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn period_loop(coordinator: Arc<Coordinator>, period_duration: Duration) {
-    let mut interval = tokio::time::interval(period_duration);
-
+async fn period_loop(coordinator: Arc<Coordinator>, schedule: PeriodSchedule) {
     loop {
-        interval.tick().await;
-        if let Err(e) = coordinator.advance_period().await {
+        let now = SystemTime::now();
+        let period_id = match schedule.period_at(now) {
+            Ok(period_id) => period_id,
+            Err(e) => {
+                error!(error = %e, "Failed to derive protocol period");
+                return;
+            }
+        };
+        if let Err(e) = coordinator.start_period(period_id).await {
             error!(error = %e, "Failed to broadcast period");
         }
+        tokio::time::sleep(schedule.until_next_period(now)).await;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PeriodSchedule {
+    genesis_unix_seconds: u64,
+    period_duration_seconds: u64,
+}
+
+impl PeriodSchedule {
+    fn new(genesis_unix_seconds: u64, period_duration: Duration) -> Result<Self> {
+        let period_duration_seconds = period_duration.as_secs();
+        anyhow::ensure!(
+            period_duration_seconds > 0,
+            "period duration must be at least one second"
+        );
+        Ok(Self {
+            genesis_unix_seconds,
+            period_duration_seconds,
+        })
+    }
+
+    fn period_at(self, now: SystemTime) -> Result<ethera_spec::PeriodId> {
+        let now = now
+            .duration_since(UNIX_EPOCH)
+            .context("system clock is before Unix epoch")?
+            .as_secs();
+        anyhow::ensure!(
+            now >= self.genesis_unix_seconds,
+            "system clock is before protocol genesis"
+        );
+        let elapsed = now - self.genesis_unix_seconds;
+        // FIXME(spec): SBCP's PeriodStart(k) formula implies period 0 starts at genesis.
+        // Keep the deployed one-based numbering until period indexing is resolved explicitly.
+        Ok(ethera_spec::PeriodId(
+            elapsed / self.period_duration_seconds + 1,
+        ))
+    }
+
+    fn until_next_period(self, now: SystemTime) -> Duration {
+        let now = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let elapsed = now.saturating_sub(self.genesis_unix_seconds);
+        let remainder = elapsed % self.period_duration_seconds;
+        Duration::from_secs(self.period_duration_seconds - remainder)
     }
 }
 
@@ -179,4 +245,41 @@ async fn shutdown_signal() {
         .await
         .expect("failed to install CTRL+C handler");
     info!("Received shutdown signal");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn period_schedule_is_derived_from_genesis() {
+        let schedule = PeriodSchedule::new(1_000, Duration::from_secs(100)).unwrap();
+
+        assert_eq!(
+            schedule
+                .period_at(UNIX_EPOCH + Duration::from_secs(1_000))
+                .unwrap(),
+            ethera_spec::PeriodId(1)
+        );
+        assert_eq!(
+            schedule
+                .period_at(UNIX_EPOCH + Duration::from_secs(1_299))
+                .unwrap(),
+            ethera_spec::PeriodId(3)
+        );
+    }
+
+    #[test]
+    fn period_schedule_waits_for_the_next_boundary() {
+        let schedule = PeriodSchedule::new(1_000, Duration::from_secs(100)).unwrap();
+
+        assert_eq!(
+            schedule.until_next_period(UNIX_EPOCH + Duration::from_secs(1_250)),
+            Duration::from_secs(50)
+        );
+        assert_eq!(
+            schedule.until_next_period(UNIX_EPOCH + Duration::from_secs(1_300)),
+            Duration::from_secs(100)
+        );
+    }
 }

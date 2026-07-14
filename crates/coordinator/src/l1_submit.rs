@@ -13,9 +13,8 @@ use alloy::sol_types::SolValue;
 use anyhow::{Context, Result};
 use tracing::{info, warn};
 
-use crate::abi::{
-    IComposeAnchorStateRegistry, IDisputeGameFactory, SuperRootProof, COMPOSE_GAME_TYPE,
-};
+use crate::abi::{IDisputeGameFactory, SuperRootProof, COMPOSE_GAME_TYPE};
+use crate::l1_recovery::recover_latest_superblock;
 use crate::proof_types::ProofData;
 use crate::settlement::{hash_super_root, mock_payload, SettlementPayload, SUPER_ROOT_VERSION};
 
@@ -72,37 +71,22 @@ impl L1Submitter {
         Ok(ProviderBuilder::new().wallet(wallet).connect_http(url))
     }
 
-    /// Reads the anchored superblock number and root from the
-    /// `ComposeAnchorStateRegistry`. Returns `None` when no registry is
-    /// configured or no anchor has been set yet.
+    fn build_read_provider(&self) -> Result<impl Provider> {
+        let url = self.rpc_url.parse().context("invalid l1_rpc_url")?;
+        Ok(ProviderBuilder::new().connect_http(url))
+    }
+
     pub async fn fetch_latest_superblock_state(&self) -> Result<Option<(u64, B256)>> {
         let Some(asr) = self.anchor_state_registry else {
             return Ok(None);
         };
 
-        let provider = self.build_provider()?;
-        let registry = IComposeAnchorStateRegistry::new(asr, provider);
-        let anchor = registry
-            .getAnchorRoot()
-            .call()
-            .await
-            .context("getAnchorRoot call failed")?;
-
-        let sb_num: u64 = anchor.l2SequenceNumber_.try_into().unwrap_or(0);
-        let Some(state) = Self::validate_anchor_state(sb_num, anchor.root_) else {
-            return Ok(None);
-        };
-
-        *self.lock_parent_hash() = state.1;
-        Ok(Some(state))
-    }
-
-    fn validate_anchor_state(sb_num: u64, root: B256) -> Option<(u64, B256)> {
-        if root == B256::ZERO {
-            return None;
+        let provider = self.build_read_provider()?;
+        let state = recover_latest_superblock(&provider, self.factory, asr).await?;
+        if let Some((_, hash)) = state {
+            *self.lock_parent_hash() = hash;
         }
-
-        Some((sb_num, root))
+        Ok(state)
     }
 
     pub async fn submit_mock(
@@ -181,24 +165,5 @@ impl L1Submitter {
         Err(last_err.unwrap_or_else(|| {
             anyhow::anyhow!("dispute game creation failed after {MAX_RETRIES} attempts")
         }))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use alloy::primitives::B256;
-
-    use super::L1Submitter;
-
-    #[test]
-    fn anchor_state_accepts_seeded_genesis_root() {
-        let root = B256::repeat_byte(0x42);
-
-        assert_eq!(L1Submitter::validate_anchor_state(0, root), Some((0, root)));
-    }
-
-    #[test]
-    fn anchor_state_rejects_empty_root() {
-        assert_eq!(L1Submitter::validate_anchor_state(0, B256::ZERO), None);
     }
 }
