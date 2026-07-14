@@ -213,6 +213,8 @@ impl PeriodSchedule {
             "system clock is before protocol genesis"
         );
         let elapsed = now - self.genesis_unix_seconds;
+        // FIXME(spec): SBCP's PeriodStart(k) formula implies period 0 starts at genesis.
+        // Keep the deployed one-based numbering until period indexing is resolved explicitly.
         Ok(ethera_spec::PeriodId(
             elapsed / self.period_duration_seconds + 1,
         ))

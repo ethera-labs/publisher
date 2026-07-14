@@ -64,6 +64,13 @@ sol! {
     #[sol(rpc)]
     interface IComposeAnchorStateRegistry {
         function getAnchorRoot() external view returns (bytes32 root_, uint256 l2SequenceNumber_);
+
+        function anchorGame() external view returns (address);
+    }
+
+    #[sol(rpc)]
+    interface IDisputeGame {
+        function extraData() external view returns (bytes);
     }
 }
 
