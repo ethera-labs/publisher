@@ -71,6 +71,12 @@ struct ConsensusOverrides {
     )]
     period_duration: Option<humantime::Duration>,
     #[arg(
+        id = "consensus_genesis_unix_seconds",
+        long = "consensus.genesis-unix-seconds",
+        env = "CONSENSUS_GENESIS_UNIX_SECONDS"
+    )]
+    genesis_unix_seconds: Option<u64>,
+    #[arg(
         id = "consensus_proof_window",
         long = "consensus.proof-window",
         env = "CONSENSUS_PROOF_WINDOW"
@@ -133,6 +139,24 @@ struct SettlementOverrides {
     )]
     proposer_key: Option<String>,
     #[arg(
+        id = "settlement_recovery_checkpoint_game_index",
+        long = "settlement.recovery-checkpoint-game-index",
+        env = "SETTLEMENT_RECOVERY_CHECKPOINT_GAME_INDEX"
+    )]
+    recovery_checkpoint_game_index: Option<u64>,
+    #[arg(
+        id = "settlement_recovery_checkpoint_number",
+        long = "settlement.recovery-checkpoint-number",
+        env = "SETTLEMENT_RECOVERY_CHECKPOINT_NUMBER"
+    )]
+    recovery_checkpoint_number: Option<u64>,
+    #[arg(
+        id = "settlement_recovery_checkpoint_hash",
+        long = "settlement.recovery-checkpoint-hash",
+        env = "SETTLEMENT_RECOVERY_CHECKPOINT_HASH"
+    )]
+    recovery_checkpoint_hash: Option<String>,
+    #[arg(
         id = "settlement_mock",
         long = "settlement.mock",
         env = "SETTLEMENT_MOCK",
@@ -151,6 +175,13 @@ struct ProofsOverrides {
         env = "PROOFS_PROVING_MODE"
     )]
     proving_mode: Option<ProvingMode>,
+    #[arg(
+        id = "proofs_required_chain_ids",
+        long = "proofs.required-chain-ids",
+        env = "PROOFS_COLLECTOR_REQUIRED_CHAIN_IDS",
+        value_delimiter = ','
+    )]
+    required_chain_ids: Option<Vec<u64>>,
     #[arg(
         id = "proving_mode_alias",
         long = "proving-mode",
@@ -236,6 +267,9 @@ impl ConsensusOverrides {
         if let Some(period_duration) = self.period_duration {
             cfg.period_duration = period_duration.into();
         }
+        if let Some(genesis_unix_seconds) = self.genesis_unix_seconds {
+            cfg.genesis_unix_seconds = Some(genesis_unix_seconds);
+        }
         if let Some(proof_window) = self.proof_window {
             cfg.proof_window = proof_window.into();
         }
@@ -275,6 +309,15 @@ impl SettlementOverrides {
         if let Some(proposer_key) = self.proposer_key {
             cfg.proposer_key = proposer_key;
         }
+        if let Some(game_index) = self.recovery_checkpoint_game_index {
+            cfg.recovery_checkpoint_game_index = Some(game_index);
+        }
+        if let Some(number) = self.recovery_checkpoint_number {
+            cfg.recovery_checkpoint_number = Some(number);
+        }
+        if let Some(hash) = self.recovery_checkpoint_hash {
+            cfg.recovery_checkpoint_hash = hash;
+        }
         if let Some(mock) = self.mock {
             cfg.mock = mock;
         }
@@ -284,6 +327,9 @@ impl SettlementOverrides {
 impl ProofsOverrides {
     fn apply(self, cfg: &mut ProofsConfig) -> bool {
         let mut explicit = false;
+        if let Some(required_chain_ids) = self.required_chain_ids {
+            cfg.required_chain_ids = required_chain_ids;
+        }
         if let Some(proving_mode) = self.proving_mode {
             cfg.proving_mode = proving_mode;
             explicit = true;
@@ -326,10 +372,20 @@ mod tests {
             "1024",
             "--api.request-timeout",
             "5s",
+            "--consensus.genesis-unix-seconds",
+            "1700000000",
             "--metrics.enabled",
             "false",
             "--settlement.dispute-game-factory",
             "0x1234",
+            "--settlement.recovery-checkpoint-game-index",
+            "12",
+            "--settlement.recovery-checkpoint-number",
+            "34",
+            "--settlement.recovery-checkpoint-hash",
+            "0xabcd",
+            "--proofs.required-chain-ids",
+            "100,200",
             "--proofs.proving-mode",
             "mock",
         ])
@@ -341,8 +397,13 @@ mod tests {
         assert_eq!(cfg.server.listen_addr, ":9090");
         assert_eq!(cfg.server.max_message_size, 1024);
         assert_eq!(cfg.api.request_timeout, Duration::from_secs(5));
+        assert_eq!(cfg.consensus.genesis_unix_seconds, Some(1_700_000_000));
         assert!(!cfg.metrics.enabled);
         assert_eq!(cfg.settlement.dispute_game_factory, "0x1234");
+        assert_eq!(cfg.settlement.recovery_checkpoint_game_index, Some(12));
+        assert_eq!(cfg.settlement.recovery_checkpoint_number, Some(34));
+        assert_eq!(cfg.settlement.recovery_checkpoint_hash, "0xabcd");
+        assert_eq!(cfg.proofs.required_chain_ids, vec![100, 200]);
         assert_eq!(cfg.proofs.proving_mode, ProvingMode::Mock);
     }
 

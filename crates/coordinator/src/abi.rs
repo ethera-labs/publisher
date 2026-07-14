@@ -38,6 +38,11 @@ sol! {
 
     #[sol(rpc)]
     interface IDisputeGameFactory {
+        function gameCount() external view returns (uint256);
+
+        function gameAtIndex(uint256 _index)
+            external view returns (uint32 gameType_, uint64 timestamp_, address proxy_);
+
         function create(
             uint32 _gameType,
             bytes32 _rootClaim,
@@ -45,6 +50,11 @@ sol! {
         ) external payable returns (address proxy_);
 
         function initBonds(uint32 _gameType) external view returns (uint256);
+    }
+
+    #[sol(rpc)]
+    interface IDisputeGame {
+        function extraData() external view returns (bytes);
     }
 
     #[sol(rpc)]

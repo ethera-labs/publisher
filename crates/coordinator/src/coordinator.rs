@@ -1,7 +1,7 @@
 //! Core coordinator state and public API.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -255,6 +255,7 @@ pub struct Coordinator {
     proof_window: Duration,
     messages_processed: AtomicU64,
     broadcasts_sent: AtomicU64,
+    protocol_ready: AtomicBool,
     start_time: Instant,
 }
 
@@ -288,6 +289,7 @@ impl Coordinator {
             proof_window,
             messages_processed: AtomicU64::new(0),
             broadcasts_sent: AtomicU64::new(0),
+            protocol_ready: AtomicBool::new(false),
             start_time: Instant::now(),
         }
     }
@@ -326,13 +328,69 @@ impl Coordinator {
         info!(client_id, chain_id = %chain_id, "Chain registered");
     }
 
+    pub async fn wait_for_chains(&self, required: &[u64], timeout: Duration) -> anyhow::Result<()> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let ready = {
+                let state = self.state.read().await;
+                required
+                    .iter()
+                    .all(|chain_id| state.is_chain_registered(ChainId::new(*chain_id)))
+            };
+            if ready {
+                return Ok(());
+            }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "required chains did not reconnect before recovery timeout"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    pub async fn broadcast_recovery_rollback(
+        &self,
+        period_id: PeriodId,
+    ) -> Result<(), publisher_transport::error::TransportError> {
+        let (superblock_number, superblock_hash) = {
+            let state = self.state.read().await;
+            (
+                state.last_finalized_superblock_number,
+                state.last_finalized_superblock_hash.clone(),
+            )
+        };
+        let msg = ethera_spec_proto::Message {
+            sender_id: "publisher".into(),
+            payload: Some(ethera_spec_proto::Payload::Rollback(
+                ethera_spec_proto::Rollback {
+                    period_id: period_id.get(),
+                    last_finalized_superblock_number: superblock_number,
+                    last_finalized_superblock_hash: superblock_hash,
+                },
+            )),
+        };
+
+        warn!(
+            period_id = period_id.get(),
+            last_finalized_superblock = superblock_number,
+            "Broadcasting startup recovery rollback"
+        );
+        self.inc_broadcasts();
+        self.server.broadcast_raw(&msg.encode_to_vec(), "").await
+    }
+
+    pub fn activate_protocol(&self) {
+        self.protocol_ready.store(true, Ordering::Release);
+        info!("Protocol recovery completed");
+    }
+
     /// Initializes superblock state from L1 on startup - must be called before
     /// the period loop starts so `next_superblock_number` and `parent_hash` are
     /// correct after a restart.
-    pub async fn init_from_l1(&self) {
+    pub async fn init_from_l1(&self) -> anyhow::Result<()> {
         if let Some(submitter) = &self.l1_submitter {
-            match submitter.fetch_latest_superblock_state().await {
-                Ok(Some((sb_num, sb_hash))) => {
+            match submitter.fetch_latest_superblock_state().await? {
+                Some((sb_num, sb_hash)) => {
                     let mut state = self.state.write().await;
                     state.last_finalized_superblock_number = sb_num;
                     state.last_finalized_superblock_hash = sb_hash.to_vec();
@@ -343,24 +401,26 @@ impl Coordinator {
                         "Initialized superblock state from L1"
                     );
                 }
-                Ok(None) => {
+                None => {
                     info!("No seeded superblock hash on L1 yet - starting from genesis");
-                }
-                Err(e) => {
-                    warn!(error = %e, "Failed to read L1 superblock state - starting from genesis");
                 }
             }
         }
+        Ok(())
     }
 
-    pub async fn advance_period(&self) -> Result<(), publisher_transport::error::TransportError> {
-        let (period_id, superblock_num) = {
+    pub async fn start_period(
+        &self,
+        period_id: PeriodId,
+    ) -> Result<(), publisher_transport::error::TransportError> {
+        let superblock_num = {
             let mut state = self.state.write().await;
-            let pid = PeriodId(state.current_period_id.get() + 1);
-            state.current_period_id = pid;
+            if period_id <= state.current_period_id {
+                return Ok(());
+            }
+            state.current_period_id = period_id;
             state.next_sequence_num = SequenceNumber(1);
-            let sb = state.next_superblock_number;
-            (pid, sb)
+            state.next_superblock_number
         };
 
         let msg = ethera_spec_proto::Message {
@@ -387,6 +447,13 @@ impl Coordinator {
         client_id: String,
         xt_req: ethera_spec_proto::XtRequest,
     ) {
+        if !self.protocol_ready.load(Ordering::Acquire) {
+            warn!(
+                client_id,
+                "Rejecting XT while protocol recovery is in progress"
+            );
+            return;
+        }
         let chains = extract_chains(&xt_req);
 
         if chains.len() < 2 {
@@ -619,6 +686,13 @@ impl Coordinator {
     /// The incoming `superblock_number` is chain-local provenance; settlement uses
     /// the publisher's current global superblock number.
     pub async fn receive_proof(&self, superblock_number: u64, chain_id: u64, data: ProofData) {
+        if !self.protocol_ready.load(Ordering::Acquire) {
+            warn!(
+                chain_id,
+                "Ignoring proof while protocol recovery is in progress"
+            );
+            return;
+        }
         let (collected, total, ready_proofs, submit_sb_number) = {
             let mut state = self.state.write().await;
             let total = state.chain_to_client.len();
