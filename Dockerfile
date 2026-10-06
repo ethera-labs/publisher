@@ -1,4 +1,4 @@
-FROM rust:1.91-slim-bookworm AS chef
+FROM rust:1.99-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa AS chef
 
 WORKDIR /app
 RUN cargo install cargo-chef --locked
